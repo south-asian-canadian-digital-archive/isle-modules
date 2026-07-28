@@ -1,0 +1,5 @@
+entity.sacda_hero.add_form:
+  title: 'Add hero section'
+  route_name: entity.sacda_hero.add_form
+  appears_on:
+    - entity.sacda_hero.collection

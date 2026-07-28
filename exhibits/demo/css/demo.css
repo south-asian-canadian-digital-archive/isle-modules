@@ -1,0 +1,44 @@
+/* Deliberately aggressive global styles — proves Shadow DOM containment. */
+* {
+  box-sizing: border-box;
+}
+
+h1, h2, p {
+  margin: 0 0 0.75rem;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.demo-hero {
+  background: #7c2d12;
+  color: #fff;
+  padding: 4rem 2rem;
+  text-align: center;
+}
+
+.demo-hero h1 {
+  font-size: 3rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.demo-body {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 3rem 2rem;
+}
+
+.demo-body h2 {
+  color: #7c2d12;
+  border-bottom: 3px solid #7c2d12;
+  padding-bottom: 0.25rem;
+}
+
+.demo-body section {
+  margin-bottom: 2.5rem;
+}
+
+code {
+  background: #f3e8e2;
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}

@@ -1,0 +1,10 @@
+services:
+  sacda_modules.hero_resolver:
+    class: Drupal\sacda_modules\HeroResolver
+    arguments:
+      - '@path.current'
+      - '@path_alias.manager'
+      - '@entity_type.manager'
+      - '@entity.repository'
+      - '@file_url_generator'
+      - '@theme_handler'

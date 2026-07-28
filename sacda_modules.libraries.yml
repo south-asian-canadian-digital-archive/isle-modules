@@ -1,0 +1,13 @@
+exhibit_loader:
+  version: 1.x
+  js:
+    js/sacda-exhibit.js: { attributes: { defer: true } }
+
+year-range:
+  version: VERSION
+  js:
+    js/year-range.js: { attributes: { defer: true } }
+  dependencies:
+    - core/drupal
+    - core/drupalSettings
+    - core/once

@@ -1,0 +1,12 @@
+name: 'SACDA Modules'
+type: module
+description: 'SACDA site functionality: per-page hero sections, static exhibit hosting, and search UI extras. Merged from the former sacda_hero, sacda_exhibits and sacda_search modules.'
+package: SACDA
+core_version_requirement: ^10 || ^11
+dependencies:
+  - drupal:media
+  - drupal:image
+  - drupal:path_alias
+  - drupal:node
+  - facets:facets
+  - facets:facets_date_range

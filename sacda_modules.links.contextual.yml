@@ -1,0 +1,4 @@
+sacda_hero.edit:
+  title: 'Edit hero'
+  route_name: 'entity.sacda_hero.edit_form'
+  group: 'sacda_hero'

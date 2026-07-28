@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Demo Exhibit</title>
+  <link rel="stylesheet" href="css/demo.css">
+</head>
+<body>
+  <header class="demo-hero">
+    <h1>Demo Exhibit</h1>
+    <p>A self-contained static exhibit hosted inside Drupal.</p>
+  </header>
+
+  <main class="demo-body">
+    <section>
+      <h2>Style isolation works</h2>
+      <p>
+        This heading is styled by <code>css/demo.css</code> (loaded via a
+        relative path rewritten to the asset route) and rendered inside a
+        Shadow DOM — the SACDA theme's Tailwind CSS cannot reach it, and this
+        exhibit's aggressive global selectors cannot reach the theme.
+      </p>
+    </section>
+
+    <section>
+      <h2>Script execution works</h2>
+      <p>Rendered at: <strong id="demo-time">JS did not run</strong></p>
+    </section>
+  </main>
+
+  <script src="js/demo.js"></script>
+</body>
+</html>

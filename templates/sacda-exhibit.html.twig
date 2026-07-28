@@ -1,0 +1,25 @@
+{#
+/**
+ * @file
+ * Wrapper for a hosted static exhibit.
+ *
+ * The <sacda-exhibit> custom element (js/sacda-exhibit.js) fetches
+ * exhibit_src and injects it into a shadow root, isolating exhibit CSS from
+ * the SACDA theme. Rendered inside the normal page chrome (header/footer),
+ * full-width, no sidebars.
+ *
+ * Available variables:
+ * - node: The exhibit node.
+ * - exhibit_src: URL of the exhibit's index.html.
+ * - assets_base: Base URL for the exhibit's static assets (trailing slash).
+ */
+#}
+<div class="sacda-exhibit-wrapper w-full">
+  <sacda-exhibit src="{{ exhibit_src }}" base="{{ assets_base }}" class="block w-full min-h-[50vh]">
+    {# Fallback shown while loading / if JS is unavailable. #}
+    <p class="py-16 text-center">
+      Loading exhibit&hellip;
+      <noscript>This exhibit requires JavaScript.</noscript>
+    </p>
+  </sacda-exhibit>
+</div>

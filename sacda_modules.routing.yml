@@ -1,0 +1,29 @@
+# /exhibits (no suffix) is the exhibits listing View — not owned by this module.
+# The \d+ requirement on {node} keeps these routes from shadowing it.
+
+sacda_modules.exhibit_view:
+  path: '/exhibits/{node}'
+  defaults:
+    _controller: '\Drupal\sacda_modules\Controller\ExhibitController::view'
+    _title_callback: '\Drupal\sacda_modules\Controller\ExhibitController::title'
+  requirements:
+    _permission: 'access content'
+    node: \d+
+  options:
+    parameters:
+      node:
+        type: entity:node
+
+sacda_modules.exhibit_asset:
+  path: '/exhibits/{node}/assets/{path}'
+  defaults:
+    _controller: '\Drupal\sacda_modules\Controller\ExhibitController::asset'
+  requirements:
+    _permission: 'access content'
+    node: \d+
+    # Allow slashes so nested asset paths (css/main.css, img/foo.jpg) resolve.
+    path: .+
+  options:
+    parameters:
+      node:
+        type: entity:node

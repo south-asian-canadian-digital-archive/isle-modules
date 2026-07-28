@@ -1,0 +1,114 @@
+<?php
+
+/**
+ * @file
+ * SACDA site functionality.
+ *
+ * Merged from three former modules, which is why the hooks below are unrelated
+ * to each other:
+ * - Hero: per-page hero sections. Path matching / media resolution lives in the
+ *   sacda_modules.hero_resolver service; rendering happens through the
+ *   sacda_hero_block plugin placed in the theme's hero region.
+ * - Exhibits: hosts static exhibit sites inside Drupal, isolated via Shadow DOM.
+ * - Search: year-range facet widget tuned to the edtf_year index field.
+ *
+ * Entity type, plugin and theme hook ids kept their original sacda_hero /
+ * year_range names through the merge so existing config keeps resolving.
+ */
+
+declare(strict_types=1);
+
+use Drupal\Core\Cache\CacheableMetadata;
+
+/**
+ * Implements hook_theme().
+ */
+function sacda_modules_theme($existing, $type, $theme, $path) {
+  return [
+    'sacda_hero' => [
+      'variables' => [
+        'title' => '',
+        'subtitle' => '',
+        'image' => '',
+      ],
+    ],
+    'sacda_exhibit' => [
+      'variables' => [
+        // The exhibit node entity.
+        'node' => NULL,
+        // URL the <sacda-exhibit> element fetches the exhibit's index.html from.
+        'exhibit_src' => NULL,
+        // Base URL (trailing slash) relative asset paths are resolved against.
+        'assets_base' => NULL,
+      ],
+    ],
+  ];
+}
+
+/**
+ * Implements hook_preprocess_block().
+ *
+ * Exposes whether a hero matches the current page so the theme can suppress
+ * the standalone page title block when a hero already carries the title.
+ */
+function sacda_modules_preprocess_block(array &$variables) {
+  if (($variables['plugin_id'] ?? NULL) !== 'page_title_block') {
+    return;
+  }
+  /** @var \Drupal\sacda_modules\HeroResolver $resolver */
+  $resolver = \Drupal::service('sacda_modules.hero_resolver');
+  $variables['sacda_hero_active'] = (bool) $resolver->resolve();
+
+  $cache = CacheableMetadata::createFromRenderArray($variables);
+  $cache->merge($resolver->getCacheMetadata())->applyTo($variables);
+}
+
+/**
+ * Implements hook_page_attachments().
+ *
+ * Registers every enabled facet block that hosts the year_range widget in
+ * drupalSettings.facets.rangeInput, keyed by block id (the value used in the
+ * `js-facet-block-id-*` DOM class). facets-views-ajax.js treats that list as an
+ * exclusion set ("Remove All Range Input Form Facet Blocks from being
+ * updated"), so those blocks are left alone when the AJAX search view rebuilds
+ * its facet blocks. Without it, the server-rendered range widget is wiped the
+ * moment any Views AJAX request fires once a range is active.
+ *
+ * Done in page_attachments (not hook_block_view_alter, whose #attached does not
+ * reliably bubble here) so the setting is present in drupalSettings from the
+ * first byte — before any behavior runs, avoiding a race with an initial Views
+ * AJAX request.
+ */
+function sacda_modules_page_attachments(array &$attachments): void {
+  $entity_type_manager = \Drupal::entityTypeManager();
+
+  // Which facets use the year_range widget?
+  $year_range_facets = [];
+  foreach ($entity_type_manager->getStorage('facets_facet')->loadMultiple() as $facet) {
+    if ($facet->getWidget()['type'] === 'year_range') {
+      $year_range_facets[$facet->id()] = TRUE;
+    }
+  }
+  if (!$year_range_facets) {
+    return;
+  }
+
+  // Register each enabled facet block that renders one of those facets.
+  foreach ($entity_type_manager->getStorage('block')->loadMultiple() as $block) {
+    if (!$block->status() || strpos($block->getPluginId(), 'facet_block:') !== 0) {
+      continue;
+    }
+    [, $facet_id] = explode(':', $block->getPluginId(), 2);
+    if (empty($year_range_facets[$facet_id])) {
+      continue;
+    }
+    $block_id = $block->id();
+    $attachments['#attached']['drupalSettings']['facets']['rangeInput'][$block_id] = [
+      'facetId' => $block_id,
+    ];
+  }
+
+  // Recompute when facets or blocks change.
+  $attachments['#cache']['tags'][] = 'config:facets_facet_list';
+  $attachments['#cache']['tags'][] = 'config:block_list';
+}

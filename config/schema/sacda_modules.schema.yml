@@ -1,0 +1,47 @@
+# Hero config entities. The name is {provider}.{config_prefix}.{id}, so merging
+# sacda_hero into sacda_modules moved these from sacda_hero.hero.* — the entity
+# type id itself is still "sacda_hero".
+sacda_modules.hero.*:
+  type: config_entity
+  label: 'SACDA Hero section'
+  mapping:
+    id:
+      type: machine_name
+      label: 'Machine name'
+    label:
+      type: label
+      label: 'Label'
+    path:
+      type: string
+      label: 'URL alias the hero applies to'
+    title:
+      type: label
+      label: 'Hero title'
+    subtitle:
+      type: label
+      label: 'Hero subtitle'
+    image:
+      type: string
+      label: 'Background media entity UUID'
+    image_style:
+      type: string
+      label: 'Image style machine name'
+    image_fallback:
+      type: string
+      label: 'Theme-relative fallback image path, used when no media is set or the UUID does not resolve'
+
+# Config schema for the year_range facet widget.
+# @see \Drupal\sacda_modules\Plugin\facets\widget\YearRangeWidget
+facet.widget.config.year_range:
+  type: facet.widget.default_config
+  label: 'Year Range widget configuration'
+  mapping:
+    min_label:
+      type: label
+      label: 'Minimum (from) label'
+    max_label:
+      type: label
+      label: 'Maximum (to) label'
+    apply_label:
+      type: label
+      label: 'Apply button label'

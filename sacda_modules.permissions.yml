@@ -1,0 +1,4 @@
+administer sacda hero:
+  title: 'Administer SACDA hero sections'
+  description: 'Create, edit and delete per-page hero section configuration.'
+  restrict access: true

@@ -1,0 +1,5 @@
+entity.sacda_hero.collection:
+  title: 'SACDA Hero sections'
+  description: 'Manage per-page hero sections.'
+  route_name: entity.sacda_hero.collection
+  parent: system.admin_structure
