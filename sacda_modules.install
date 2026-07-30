@@ -1,0 +1,173 @@
+<?php
+
+/**
+ * @file
+ * Install, schema and update hooks for sacda_modules.
+ *
+ * The only table here is the Place Lookup authority mirror: a local copy of
+ * Getty TGN and CGNDB place records, refreshed on a schedule by
+ * `drush sacda-place:sync-authority`. It is deliberately NOT queried live from
+ * Getty/NRCan — see src/PlaceLookup/PlaceLookupService.php for why.
+ *
+ * Note the table is dropped automatically when the module is uninstalled, so
+ * `drush pm:uninstall sacda_modules` silently destroys a full import. Re-run
+ * the sync commands after any reinstall.
+ */
+
+declare(strict_types=1);
+
+/**
+ * Implements hook_schema().
+ */
+function sacda_modules_schema(): array {
+  $schema['sacda_place_authority'] = [
+    'description' => 'Local mirror of Getty TGN and CGNDB place authority records.',
+    'fields' => [
+      'id' => [
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Primary key.',
+      ],
+      'source' => [
+        // Drupal's Schema API has no ENUM; validity is enforced in PHP by
+        // \Drupal\sacda_modules\PlaceLookup\PlaceSource.
+        'type' => 'varchar_ascii',
+        'length' => 16,
+        'not null' => TRUE,
+        'description' => 'Authority source: tgn or cgndb.',
+      ],
+      'source_id' => [
+        'type' => 'varchar_ascii',
+        'length' => 64,
+        'not null' => TRUE,
+        'description' => 'Identifier within the source (TGN Subject_ID, CGNDB_ID).',
+      ],
+      'name' => [
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'description' => 'Preferred place name as published by the source.',
+      ],
+      'name_norm' => [
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'description' => 'Normalized name (see PlaceLookupService::normalize).',
+      ],
+      'parent_path' => [
+        'type' => 'varchar',
+        'length' => 512,
+        'not null' => FALSE,
+        'description' => 'Ancestor chain, nearest first, comma-delimited.',
+      ],
+      'place_type' => [
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => FALSE,
+        'description' => 'Source place/feature type, e.g. "inhabited place".',
+      ],
+      'country_code' => [
+        'type' => 'varchar_ascii',
+        'length' => 2,
+        'not null' => FALSE,
+        'description' => 'ISO country code derived from the ancestor chain.',
+      ],
+      'lat' => [
+        'type' => 'numeric',
+        'precision' => 9,
+        'scale' => 6,
+        'not null' => FALSE,
+        'description' => 'Latitude, decimal degrees.',
+      ],
+      'lon' => [
+        'type' => 'numeric',
+        'precision' => 9,
+        'scale' => 6,
+        'not null' => FALSE,
+        'description' => 'Longitude, decimal degrees.',
+      ],
+      'variant_names' => [
+        'type' => 'text',
+        'size' => 'normal',
+        'not null' => FALSE,
+        'description' => 'Non-preferred names, newline-delimited.',
+      ],
+      'variant_norm' => [
+        'type' => 'text',
+        'size' => 'normal',
+        'not null' => FALSE,
+        'description' => 'Normalized variant names, newline-delimited.',
+      ],
+      'local_tids' => [
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+        'description' => 'Comma-delimited tids of matching geo_location terms.',
+      ],
+      'local_match_count' => [
+        'type' => 'int',
+        'size' => 'small',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Number of matching geo_location terms: 0, 1 or many.',
+      ],
+      'imported' => [
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Unix timestamp of the import that wrote this row.',
+      ],
+    ],
+    'primary key' => ['id'],
+    'unique keys' => [
+      'source_record' => ['source', 'source_id'],
+    ],
+    'indexes' => [
+      // Prefix index at 64 chars: enough for the `LIKE 'foo%'` range scan that
+      // is the hot path, and roughly a quarter the size of indexing the full
+      // utf8mb4 varchar(255). Substring `LIKE '%foo%'` cannot use this (or any
+      // B-tree) index and full-scans by design — see PlaceLookupService.
+      'name_norm' => [['name_norm', 64]],
+      'local_match_count' => ['local_match_count'],
+      'source_country' => ['source', 'country_code'],
+    ],
+  ];
+
+  return $schema;
+}
+
+/**
+ * Create the sacda_place_authority table for the Place Lookup tool.
+ */
+function sacda_modules_update_10001(): void {
+  $schema = \Drupal::database()->schema();
+  if (!$schema->tableExists('sacda_place_authority')) {
+    $tables = sacda_modules_schema();
+    $schema->createTable('sacda_place_authority', $tables['sacda_place_authority']);
+  }
+}
+
+/**
+ * Add a FULLTEXT index so word matching does not full-scan 1.3M rows.
+ */
+function sacda_modules_update_10002(): void {
+  $connection = \Drupal::database();
+
+  // Drupal's Schema API cannot express FULLTEXT, so this is raw DDL and only
+  // applies to MySQL/MariaDB. Everything still works without it — the search
+  // service checks for the index and falls back to LIKE — it is just slower.
+  if ($connection->databaseType() !== 'mysql') {
+    return;
+  }
+
+  $table = $connection->getPrefix() . 'sacda_place_authority';
+  $existing = $connection->query('SHOW INDEX FROM {sacda_place_authority} WHERE Key_name = :name', [
+    ':name' => 'ft_place_name',
+  ])->fetchAll();
+
+  if (!$existing) {
+    $connection->query('ALTER TABLE ' . $table . ' ADD FULLTEXT KEY ft_place_name (name_norm, variant_norm)');
+  }
+}

@@ -1,0 +1,70 @@
+{#
+/**
+ * @file
+ * Place Lookup tool.
+ *
+ * Plain and dense on purpose — this is a tool people use fifty times a day, so
+ * chrome is cost, not polish. Everything below the input is rendered by
+ * js/place-lookup.js from the JSON endpoint; the markup here is only the shell,
+ * the static advisories and the no-JS fallback.
+ *
+ * Available variables:
+ * - endpoint: URL of the JSON search endpoint.
+ * - can_create_terms: TRUE if the viewer holds 'create place terms'.
+ */
+#}
+<div class="place-lookup" data-place-lookup data-endpoint="{{ endpoint }}">
+
+  <p class="place-lookup__intro">
+    {{ 'Type a place name to find its authority identifier. Copy the identifier into the ingest spreadsheet — never a hand-written slug.'|t }}
+  </p>
+
+  <div class="place-lookup__search">
+    <label class="place-lookup__label" for="place-lookup-input">{{ 'Place name'|t }}</label>
+    <input
+      type="text"
+      id="place-lookup-input"
+      class="place-lookup__input"
+      data-place-lookup-input
+      autocomplete="off"
+      autocapitalize="off"
+      spellcheck="false"
+      role="combobox"
+      aria-expanded="false"
+      aria-autocomplete="list"
+      aria-controls="place-lookup-results"
+      aria-describedby="place-lookup-hint"
+      placeholder="{{ 'e.g. Paldi, Shimla, Abbotsford'|t }}" />
+    <p class="place-lookup__hint" id="place-lookup-hint">
+      {{ 'Arrow keys to move, Enter to copy the identifier, Escape to clear.'|t }}
+    </p>
+  </div>
+
+  <div class="place-lookup__status" data-place-lookup-status role="status" aria-live="polite"></div>
+
+  <div
+    class="place-lookup__results"
+    id="place-lookup-results"
+    data-place-lookup-results
+    role="listbox"
+    aria-label="{{ 'Place candidates'|t }}"
+    {% if can_create_terms %}data-can-create-terms="1"{% endif %}>
+    <noscript>
+      <p class="place-lookup__error">{{ 'Place lookup needs JavaScript enabled.'|t }}</p>
+    </noscript>
+  </div>
+
+  {#
+    ODC-By 1.0 requires attribution for the Getty data. This line is not
+    decorative — do not remove it.
+  #}
+  <footer class="place-lookup__attribution">
+    <p>
+      {{ 'Contains information from the J. Paul Getty Trust, Getty Research Institute, the Getty Thesaurus of Geographic Names, which is made available under the ODC Attribution License.'|t }}
+    </p>
+    <p>
+      {{ 'Canadian place names from the Canadian Geographical Names Database (CGNDB), Natural Resources Canada.'|t }}
+    </p>
+  </footer>
+
+</div>

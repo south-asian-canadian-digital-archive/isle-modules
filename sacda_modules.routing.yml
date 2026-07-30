@@ -27,3 +27,24 @@ sacda_modules.exhibit_asset:
     parameters:
       node:
         type: entity:node
+
+# Place Lookup. Access is plain Drupal permissions on both routes — no custom
+# access checker. The JSON endpoint deliberately sits outside /admin so it
+# skips admin theme negotiation.
+sacda_modules.place_lookup:
+  path: '/admin/content/places/lookup'
+  defaults:
+    _controller: '\Drupal\sacda_modules\Controller\PlaceLookupController::page'
+    _title: 'Place lookup'
+  requirements:
+    _permission: 'use place lookup'
+
+sacda_modules.place_lookup_api:
+  path: '/api/place-lookup'
+  defaults:
+    _controller: '\Drupal\sacda_modules\Controller\PlaceLookupController::search'
+  methods: [GET]
+  requirements:
+    _permission: 'use place lookup'
+  options:
+    no_cache: TRUE

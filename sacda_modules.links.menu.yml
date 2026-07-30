@@ -3,3 +3,9 @@ entity.sacda_hero.collection:
   description: 'Manage per-page hero sections.'
   route_name: entity.sacda_hero.collection
   parent: system.admin_structure
+
+sacda_modules.place_lookup:
+  title: 'Place lookup'
+  description: 'Find Getty TGN and CGNDB identifiers for place names.'
+  route_name: sacda_modules.place_lookup
+  parent: system.admin_content

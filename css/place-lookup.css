@@ -1,0 +1,218 @@
+/**
+ * @file
+ * Place Lookup.
+ *
+ * Plain and dense. This is an internal tool used fifty times a day — the goal
+ * is scanning speed, not visual interest. Colours are drawn from Claro's
+ * palette so it sits inside the admin theme without asserting itself.
+ */
+
+.place-lookup {
+  max-width: 60rem;
+}
+
+.place-lookup__intro {
+  margin: 0 0 1rem;
+  color: #545560;
+}
+
+.place-lookup__label {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.place-lookup__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.6rem 0.75rem;
+  font-size: 1.125rem;
+  border: 1px solid #8e929c;
+  border-radius: 2px;
+}
+
+.place-lookup__input:focus {
+  outline: 2px solid #003ecc;
+  outline-offset: 1px;
+}
+
+.place-lookup__hint,
+.place-lookup__status {
+  margin: 0.35rem 0 0;
+  font-size: 0.8125rem;
+  color: #545560;
+}
+
+.place-lookup__status {
+  min-height: 1.25rem;
+}
+
+/* Groups ------------------------------------------------------------------ */
+
+.place-lookup__group {
+  margin-top: 1.5rem;
+}
+
+.place-lookup__group + .place-lookup__group {
+  border-top: 2px solid #d3d4d9;
+  padding-top: 1rem;
+}
+
+.place-lookup__group-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #545560;
+}
+
+/*
+ * CGNDB content advisory. Inline and unmissable by design — the database
+ * carries historical names that are racist, offensive and derogatory, and this
+ * is a South Asian Canadian archive. Do not restyle this into a quiet note.
+ */
+.place-lookup__advisory {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid #a33;
+  background: #fdf5f5;
+  font-size: 0.8125rem;
+  color: #3b3b3b;
+}
+
+/* Rows -------------------------------------------------------------------- */
+
+.place-lookup__row {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #e6e6e6;
+  cursor: pointer;
+}
+
+.place-lookup__row:hover,
+.place-lookup__row.is-active {
+  background: #eef3fb;
+}
+
+.place-lookup__row.is-active {
+  outline: 2px solid #003ecc;
+  outline-offset: -2px;
+}
+
+.place-lookup__row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.place-lookup__name {
+  font-weight: 700;
+}
+
+.place-lookup__type {
+  font-size: 0.8125rem;
+  color: #545560;
+}
+
+.place-lookup__path,
+.place-lookup__meta {
+  font-size: 0.8125rem;
+  color: #75767c;
+}
+
+.place-lookup__aside {
+  flex: 0 0 auto;
+  text-align: right;
+  max-width: 20rem;
+}
+
+/* Badges ------------------------------------------------------------------ */
+
+.place-lookup__badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 2px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.place-lookup__badge--exists {
+  background: #d7f4d7;
+  color: #1a5c1a;
+}
+
+.place-lookup__badge--absent {
+  background: #ececf0;
+  color: #545560;
+}
+
+.place-lookup__badge--review {
+  background: #fdf0d5;
+  color: #734c00;
+}
+
+.place-lookup__terms {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  font-size: 0.8125rem;
+}
+
+.place-lookup__term-note {
+  color: #75767c;
+}
+
+/* Empty and error states -------------------------------------------------- */
+
+.place-lookup__empty {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px dashed #8e929c;
+  background: #fafafa;
+}
+
+.place-lookup__empty p {
+  margin: 0 0 0.75rem;
+}
+
+.place-lookup__request {
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+
+.place-lookup__error {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border-left: 4px solid #a33;
+  background: #fdf5f5;
+}
+
+/* Attribution ------------------------------------------------------------- */
+
+/*
+ * ODC-By 1.0 requires the Getty attribution to be displayed. Keep it visible.
+ */
+.place-lookup__attribution {
+  margin-top: 2.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #d3d4d9;
+  font-size: 0.75rem;
+  color: #75767c;
+}
+
+.place-lookup__attribution p {
+  margin: 0 0 0.25rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .place-lookup * {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}

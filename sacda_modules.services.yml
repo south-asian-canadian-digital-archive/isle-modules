@@ -8,3 +8,19 @@ services:
       - '@entity.repository'
       - '@file_url_generator'
       - '@theme_handler'
+
+  # Place Lookup: local mirror of Getty TGN / CGNDB, queried offline.
+  sacda_modules.place_lookup:
+    class: Drupal\sacda_modules\PlaceLookup\PlaceLookupService
+    arguments:
+      - '@database'
+      - '@transliteration'
+      - '@entity_type.manager'
+      - '@datetime.time'
+
+  # Parsers are stateless; registered so the Drush command can autowire them.
+  sacda_modules.place_lookup.tgn_parser:
+    class: Drupal\sacda_modules\PlaceLookup\Parser\TgnXmlParser
+
+  sacda_modules.place_lookup.cgndb_parser:
+    class: Drupal\sacda_modules\PlaceLookup\Parser\CgndbCsvParser

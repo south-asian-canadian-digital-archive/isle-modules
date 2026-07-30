@@ -11,6 +11,8 @@
  *   sacda_hero_block plugin placed in the theme's hero region.
  * - Exhibits: hosts static exhibit sites inside Drupal, isolated via Shadow DOM.
  * - Search: year-range facet widget tuned to the edtf_year index field.
+ * - Place Lookup: internal cataloguing tool at /admin/content/places/lookup,
+ *   backed by a local Getty TGN / CGNDB mirror. See src/PlaceLookup/.
  *
  * Entity type, plugin and theme hook ids kept their original sacda_hero /
  * year_range names through the merge so existing config keeps resolving.
@@ -40,6 +42,14 @@ function sacda_modules_theme($existing, $type, $theme, $path) {
         'exhibit_src' => NULL,
         // Base URL (trailing slash) relative asset paths are resolved against.
         'assets_base' => NULL,
+      ],
+    ],
+    'sacda_place_lookup' => [
+      'variables' => [
+        // URL the JS fetches results from; also passed via drupalSettings.
+        'endpoint' => NULL,
+        // Whether to offer the archivist-only "establish term" affordance.
+        'can_create_terms' => FALSE,
       ],
     ],
   ];

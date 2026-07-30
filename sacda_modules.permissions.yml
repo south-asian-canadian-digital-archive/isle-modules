@@ -2,3 +2,13 @@ administer sacda hero:
   title: 'Administer SACDA hero sections'
   description: 'Create, edit and delete per-page hero section configuration.'
   restrict access: true
+
+use place lookup:
+  title: 'Use the place lookup tool'
+  description: 'Search the local Getty TGN / CGNDB mirror and copy authority identifiers.'
+  restrict access: true
+
+create place terms:
+  title: 'Establish new geographic terms from place lookup'
+  description: 'Create geo_location terms from an authority record. Archivist-level; RAs find places, the archivist establishes them.'
+  restrict access: true

@@ -11,3 +11,18 @@ year-range:
     - core/drupal
     - core/drupalSettings
     - core/once
+
+place_lookup:
+  version: VERSION
+  js:
+    js/place-lookup.js: { attributes: { defer: true } }
+  css:
+    component:
+      css/place-lookup.css: {}
+  dependencies:
+    - core/drupal
+    # Drupal.announce() lives here, not in core/drupal — the copy confirmation
+    # is silent to screen readers without it.
+    - core/drupal.announce
+    - core/drupalSettings
+    - core/once
