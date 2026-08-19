@@ -21,6 +21,7 @@
 declare(strict_types=1);
 
 use Drupal\Core\Cache\CacheableMetadata;
+use Drupal\node\NodeInterface;
 
 /**
  * Implements hook_theme().
@@ -71,6 +72,68 @@ function sacda_modules_preprocess_block(array &$variables) {
 
   $cache = CacheableMetadata::createFromRenderArray($variables);
   $cache->merge($resolver->getCacheMetadata())->applyTo($variables);
+}
+
+/**
+ * Implements hook_preprocess_page().
+ *
+ * Exposes published Exhibit nodes marked with Drupal's core "Promoted to front
+ * page" flag. This deliberately keeps selection in normal content editing:
+ * editors can feature or remove an exhibit without changing a View or theme.
+ */
+function sacda_modules_preprocess_page(array &$variables): void {
+  if (!\Drupal::service('path.matcher')->isFrontPage()) {
+    return;
+  }
+
+  $storage = \Drupal::entityTypeManager()->getStorage('node');
+  $ids = $storage->getQuery()
+    ->accessCheck(TRUE)
+    ->condition('type', 'exhibit')
+    ->condition('status', NodeInterface::PUBLISHED)
+    ->condition('promote', NodeInterface::PROMOTED)
+    ->sort('sticky', 'DESC')
+    ->sort('changed', 'DESC')
+    ->execute();
+
+  $variables['featured_exhibits'] = [];
+  $cacheability = (new CacheableMetadata())
+    ->setCacheTags(['node_list:exhibit'])
+    ->setCacheContexts(['user.node_grants:view']);
+  $file_url_generator = \Drupal::service('file_url_generator');
+
+  foreach ($storage->loadMultiple($ids) as $node) {
+    if (!$node->hasField('field_thumbnail') || $node->get('field_thumbnail')->isEmpty()) {
+      continue;
+    }
+
+    $media = $node->get('field_thumbnail')->entity;
+    if (!$media || !$media->hasField('field_media_image') || $media->get('field_media_image')->isEmpty()) {
+      continue;
+    }
+    $image_item = $media->get('field_media_image')->first();
+    $file = $image_item?->entity;
+    if (!$file) {
+      continue;
+    }
+
+    $url = $node->toUrl()->toString();
+    if ($node->hasField('field_external_url') && !$node->get('field_external_url')->isEmpty()) {
+      $url = $node->get('field_external_url')->first()->getUrl()->toString();
+    }
+
+    $variables['featured_exhibits'][] = [
+      'title' => $node->label(),
+      'url' => $url,
+      'image' => $file_url_generator->generateString($file->getFileUri()),
+      'image_alt' => trim((string) $image_item->alt) ?: $node->label(),
+    ];
+    $cacheability->addCacheableDependency($node);
+    $cacheability->addCacheableDependency($media);
+    $cacheability->addCacheableDependency($file);
+  }
+
+  $cacheability->applyTo($variables['page']);
 }
 
 /**

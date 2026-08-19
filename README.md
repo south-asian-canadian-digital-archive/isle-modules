@@ -5,6 +5,19 @@ entities** (`sacda_hero.hero.*`) instead of hardcoding them in theme templates.
 Because they are config, heroes deploy with the rest of the site config via
 `drush cex` / `drush cim` — no code change needed to add or edit a hero.
 
+## Front-page promoted exhibits
+
+The homepage's Featured Exhibits are normal published Exhibit nodes with
+Drupal's **Promoted to front page** checkbox enabled. The module supplies their
+title, `field_thumbnail` image media and `field_external_url` to the theme; no
+exhibit titles, links or images are hardcoded in the homepage template.
+
+Editors manage the selection from an Exhibit's edit form under the standard
+promotion options. Sticky exhibits sort first, followed by the most recently
+updated. Exhibits without a thumbnail are omitted because the homepage card
+design requires an image. The SACDA theme displays three at once and provides
+an accessible rotating display when more than three are promoted.
+
 ## Managing heroes
 
 Admin UI: **Structure → SACDA Hero sections** (`/admin/structure/sacda-hero`),
