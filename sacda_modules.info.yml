@@ -10,3 +10,6 @@ dependencies:
   - drupal:node
   - facets:facets
   - facets:facets_date_range
+  # Subject terms carry LCSH/TGM authority links; see scripts/authority-reconcile.sh.
+  - authority_resolver:authority_resolver
+  - authority_resolver:authority_resolver_cat
