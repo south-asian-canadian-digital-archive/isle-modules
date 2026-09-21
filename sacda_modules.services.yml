@@ -24,3 +24,13 @@ services:
 
   sacda_modules.place_lookup.cgndb_parser:
     class: Drupal\sacda_modules\PlaceLookup\Parser\CgndbCsvParser
+
+  # Collection cards fall back to a child's thumbnail. dgi_image_discovery only
+  # ever tries ONE child; this tries the first few that actually have an image.
+  sacda_modules.discover_first_available_child_subscriber:
+    class: Drupal\sacda_modules\EventSubscriber\DiscoverFirstAvailableChildThumbnailSubscriber
+    arguments:
+      - '@dgi_image_discovery.service'
+      - '@entity_type.manager'
+    tags:
+      - name: event_subscriber

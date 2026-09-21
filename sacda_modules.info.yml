@@ -8,6 +8,8 @@ dependencies:
   - drupal:image
   - drupal:path_alias
   - drupal:node
+  # Collection thumbnail fallback; see DiscoverFirstAvailableChildThumbnailSubscriber.
+  - dgi_image_discovery:dgi_image_discovery
   - facets:facets
   - facets:facets_date_range
   # Subject terms carry LCSH/TGM authority links; see scripts/authority-reconcile.sh.
