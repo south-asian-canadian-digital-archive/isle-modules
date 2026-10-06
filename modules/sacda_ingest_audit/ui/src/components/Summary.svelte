@@ -1,5 +1,5 @@
 <script>
-  let { result, ondownload } = $props();
+  let { result, bundles, ondownload } = $props();
   const s = $derived(result.stats);
   const pct = (n) => `${(n * 100).toFixed(n === 1 || n === 0 ? 0 : 1)}%`;
   const share = (n) => (s.rows ? (n / s.rows) * 100 : 0);
@@ -8,7 +8,7 @@
 <section class="card summary" aria-label="Audit summary">
   <div class="head">
     <h2>3. Results</h2>
-    <span class="muted">{result.requests} JSON:API requests · {result.seconds.toFixed(1)}s</span>
+    <span class="muted">{result.requests} JSON:API requests · {result.seconds.toFixed(1)}s{result.resolvedCount ? ` · ${result.resolvedCount} marked resolved` : ''}</span>
     <button class="btn secondary" onclick={ondownload}>Download issues (CSV)</button>
   </div>
 
@@ -20,6 +20,9 @@
     <div class="tile">
       <span class="value">{s.found}<span class="of">/{s.rows}</span></span>
       <span class="label">rows found in the repository</span>
+      <span class="types">
+        {#each Object.entries(s.byBundle) as [b, n]}<span>{n} {bundles[b]?.label ?? b}</span>{/each}
+      </span>
     </div>
     <div class="tile" class:bad={s.notFound}>
       <span class="value">{s.notFound}</span>
@@ -55,6 +58,7 @@
   .tile .value { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
   .tile .of { font-size: 1rem; color: var(--ia-muted); font-weight: 500; }
   .tile .label { font-size: 0.8rem; color: var(--ia-muted); }
+  .types { display: flex; flex-wrap: wrap; gap: 0.15rem 0.6rem; font-size: 0.75rem; color: var(--ia-muted); margin-top: 0.2rem; }
   .tile.hero { grid-column: span 2; flex-direction: row; align-items: center; gap: 0.9rem; background: var(--ia-subtle); }
   .tile.hero .value { font-size: 2.4rem; }
   .tile.bad { border-color: var(--ia-error-line); background: var(--ia-error-bg); }

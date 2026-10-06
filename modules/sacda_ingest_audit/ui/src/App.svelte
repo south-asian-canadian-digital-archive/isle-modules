@@ -7,6 +7,7 @@
   import { issuesCsv } from './lib/audit.js';
   import { suggestMapping, MATCH_KEY } from './lib/compare.js';
   import { audit } from './lib/worker.js';
+  import { load as loadMarks, save as saveMarks, cellKey, rowKey, applyResolved } from './lib/resolved.js';
 
   let { settings } = $props();
 
@@ -30,12 +31,34 @@
 
   const hasKey = $derived(table ? table.headers.some((h) => mapping[h] === MATCH_KEY) : false);
 
+  // Issues the viewer has marked resolved (this browser only).
+  let marks = $state.raw(loadMarks());
+  let showResolved = $state(false);
+  const view = $derived(result ? applyResolved(result, marks) : null);
+
+  function toggle(key) {
+    const next = new Set(marks);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    marks = next;
+    saveMarks(next);
+  }
+  const toggleCell = (row, column, cell) => toggle(cellKey(row, column, { sheet: cell.sheet, server: cell.server }));
+  const toggleRow = (row) => toggle(rowKey(row));
+
+  // The result belongs to the mapping/options it was run with; say so when
+  // they have changed since, instead of silently showing stale results.
+  const runKey = $derived(JSON.stringify([mapping, delimiter, strict, scanExtra]));
+  let ranWith = $state('');
+  const stale = $derived(!!result && !running && runKey !== ranWith);
+
   // Per-viewer convenience only: remembered column choices, by header name.
   function remembered() {
     try { return JSON.parse(localStorage.getItem(REMEMBER) ?? '{}') ?? {}; } catch { return {}; }
   }
   function remember(header, target) {
-    try { localStorage.setItem(REMEMBER, JSON.stringify({ ...remembered(), [header]: target })); } catch { /* storage unavailable */ }
+    const next = { ...remembered() };
+    if (target === null) delete next[header]; else next[header] = target;
+    try { localStorage.setItem(REMEMBER, JSON.stringify(next)); } catch { /* storage unavailable */ }
   }
 
   function loaded(workbook) {
@@ -65,9 +88,11 @@
     runError = '';
     result = null;
     progress = { stage: 'Starting', done: 0, total: 0, requests: 0 };
+    const key = runKey;
     try {
       result = await audit(table, $state.snapshot(settings), { mapping: $state.snapshot(mapping), delimiter: delimiter || '|', strict, scanExtra },
         (p) => { progress = p; });
+      ranWith = key;
     }
     catch (e) {
       runError = e.message;
@@ -78,7 +103,7 @@
   }
 
   function download() {
-    const blob = new Blob([issuesCsv(result)], { type: 'text/csv' });
+    const blob = new Blob([issuesCsv(view)], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `ingest-audit-${(source?.name ?? 'sheet').replace(/\.[^.]+$/, '')}.csv`;
@@ -120,7 +145,9 @@
   {#if table}
     <section class="card">
       <h2>2. Compare</h2>
-      <ColumnMapper headers={table.headers} rows={table.rows} bundles={settings.bundles} bind:mapping onchange={remember} />
+      {#key table}
+        <ColumnMapper headers={table.headers} rows={table.rows} bundles={settings.bundles} bind:mapping onchange={remember} />
+      {/key}
       <div class="options">
         <label>
           Multi-value separator
@@ -136,7 +163,7 @@
         </label>
       </div>
       <div class="actions">
-        <button class="btn" onclick={run} disabled={running || !hasKey}>{running ? 'Auditing…' : 'Run audit'}</button>
+        <button class="btn" onclick={run} disabled={running || !hasKey}>{running ? 'Auditing…' : result ? 'Run audit again' : 'Run audit'}</button>
         {#if !hasKey}<span class="muted">Map a column to the identifier first.</span>{/if}
         {#if running}
           <div class="progress" aria-live="polite">
@@ -149,10 +176,17 @@
     </section>
   {/if}
 
-  {#if result}
-    <Summary {result} ondownload={download} />
-    <ResultsTable {result} nodeBase={settings.nodeBase} />
-    {#if scanExtra}<ExtraNodes extra={result.extra} truncated={result.truncated} nodeBase={settings.nodeBase} />{/if}
+  {#if view}
+    {#if stale}
+      <div class="stale" role="status">
+        The mapping or options changed since these results were produced.
+        <button class="btn" onclick={run}>Re-run with the new mapping</button>
+      </div>
+    {/if}
+    <Summary result={view} bundles={settings.bundles} ondownload={download} />
+    <ResultsTable result={view} bundles={settings.bundles} nodeBase={settings.nodeBase}
+      bind:showResolved ontogglecell={toggleCell} ontogglerow={toggleRow} />
+    {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} nodeBase={settings.nodeBase} />{/if}
   {/if}
 </div>
 
@@ -163,6 +197,11 @@
   .options label { display: inline-flex; gap: 0.5rem; align-items: center; }
   .options select, .options input:not([type]) { font: inherit; padding: 0.3em 0.5em; border: 1px solid var(--ia-border); border-radius: 4px; }
   .narrow { width: 3.5em; text-align: center; }
+  .stale {
+    position: sticky; top: 0.5rem; z-index: 10; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;
+    padding: 0.6rem 0.9rem; margin-bottom: 1rem; border-radius: 8px;
+    background: var(--ia-warn-bg); color: var(--ia-warn); border: 1px solid var(--ia-warn-line);
+  }
   .actions { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 1rem; }
   .progress { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--ia-muted); }
   .progress progress { width: 16rem; }

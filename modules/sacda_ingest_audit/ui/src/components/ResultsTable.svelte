@@ -1,12 +1,13 @@
 <script>
   import CellDetail from './CellDetail.svelte';
 
-  let { result, nodeBase } = $props();
+  let { result, bundles, nodeBase, showResolved = $bindable(false), ontogglecell, ontogglerow } = $props();
 
   // Virtual scrolling: rows have a fixed height, and only the ones in view
   // (plus OVERSCAN either side) are in the DOM; spacer rows stand in for the
-  // rest, so 5,000 rows scroll like 30.
-  const ROW_H = 40;
+  // rest, so 5,000 rows scroll like 30. The row height is measured from the
+  // DOM rather than assumed, and the window is clamped at the end, so the
+  // spacers always add up to the same total height and nothing jumps.
   const OVERSCAN = 8;
   const GLYPH = { error: '✕', warn: '!', info: 'i' };
   const STATUS_LABEL = { ok: 'Matches', info: 'Only in repository', warn: 'Check', error: 'Mismatch', skip: 'Not compared' };
@@ -19,7 +20,10 @@
   let scrollTop = $state(0);
   let viewH = $state(600);
   let headH = $state(0);
-  let selected = $state(null); // { row, column }
+  let rowH = $state(40);
+  let typeFilter = $state('');
+  // Selection by row line + column name, so it survives re-runs and resolve toggles.
+  let selected = $state(null); // { line, column }
 
   const idColumn = $derived(result.columns.find((c) => c.role === 'identifier'));
   const colStats = $derived(result.stats.columns);
@@ -31,21 +35,41 @@
   const rows = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return result.rows.filter((r) => {
-      if (filter === 'problems' && r.status === 'ok') return false;
+      if (filter === 'problems' && r.status === 'ok' && !(showResolved && hasResolved(r))) return false;
       if (filter === 'errors' && r.status !== 'error') return false;
-      if (filter === 'missing' && r.nodes.length) return false;
+      if (filter === 'missing' && (r.nodes.length || (r.rowResolved && !showResolved))) return false;
+      if (typeFilter && r.bundle !== typeFilter) return false;
       if (focusColumn && !['error', 'warn'].includes(r.cells[focusColumn]?.status)) return false;
       if (q && !`${r.identifier} ${r.title}`.toLowerCase().includes(q)) return false;
       return true;
     });
   });
-  const start = $derived(Math.max(0, Math.floor((scrollTop - headH) / ROW_H) - OVERSCAN));
-  const end = $derived(Math.min(rows.length, start + Math.ceil(viewH / ROW_H) + 2 * OVERSCAN));
+  const windowSize = $derived(Math.ceil(viewH / rowH) + 2 * OVERSCAN);
+  const start = $derived(Math.min(
+    Math.max(0, Math.floor((scrollTop - headH) / rowH) - OVERSCAN),
+    Math.max(0, rows.length - windowSize),
+  ));
+  const end = $derived(Math.min(rows.length, start + windowSize));
   const visible = $derived(rows.slice(start, end));
+
+  $effect(() => {
+    visible;
+    const tr = scroller?.querySelector('tbody tr:not(.spacer)');
+    if (tr?.offsetHeight && tr.offsetHeight !== rowH) rowH = tr.offsetHeight;
+  });
+
+  const byLine = $derived(new Map(result.rows.map((r) => [r.line, r])));
+  const selRow = $derived(selected ? byLine.get(selected.line) : null);
+  const selCol = $derived(selected ? result.columns.find((c) => c.name === selected.column) : null);
+  const typesPresent = $derived(Object.keys(result.stats.byBundle));
+
+  function hasResolved(r) {
+    return r.rowResolved || Object.values(r.cells).some((c) => c.resolved);
+  }
 
   // Any filter change goes back to the top.
   $effect(() => {
-    filter; query; focusColumn;
+    filter; query; focusColumn; typeFilter;
     if (scroller) scroller.scrollTop = 0;
     scrollTop = 0;
   });
@@ -54,7 +78,7 @@
     all: result.rows.length,
     problems: result.rows.filter((r) => r.status !== 'ok').length,
     errors: result.rows.filter((r) => r.status === 'error').length,
-    missing: result.rows.filter((r) => !r.nodes.length).length,
+    missing: result.rows.filter((r) => !r.nodes.length && !r.rowResolved).length,
   });
 
   function text(cell) {
@@ -79,7 +103,14 @@
       {/each}
     </div>
     <input type="search" bind:value={query} placeholder="Find identifier or title" aria-label="Find identifier or title" />
+    {#if typesPresent.length > 1}
+      <select bind:value={typeFilter} aria-label="Content type">
+        <option value="">All content types</option>
+        {#each typesPresent as b}<option value={b}>{bundles[b]?.label ?? b} ({result.stats.byBundle[b]})</option>{/each}
+      </select>
+    {/if}
     <label class="check"><input type="checkbox" bind:checked={problemColumnsOnly} /> Only columns with issues</label>
+    <label class="check"><input type="checkbox" bind:checked={showResolved} /> Show resolved{result.resolvedCount ? ` (${result.resolvedCount})` : ''}</label>
     <span class="muted shown">{rows.length.toLocaleString()} rows</span>
   </div>
 
@@ -95,18 +126,20 @@
     <span class="sw warn">! term or date differs, check it</span>
     <span class="sw info">i blank in file, set in repository</span>
     <span class="sw skip">not compared</span>
-    <span>Click any cell for the side-by-side values.</span>
+    <span class="sw resolved">✓ marked resolved</span>
+    <span>Click a cell to compare values and mark it resolved.</span>
   </div>
 
   {#if !rows.length}
     <p class="empty">{filter === 'problems' && !query && !focusColumn ? 'Every row matches the repository.' : 'No rows match this filter.'}</p>
   {:else}
-    <div class="scroll" tabindex="-1" bind:this={scroller} bind:clientHeight={viewH} onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}>
+    <div class="scroll" tabindex="-1" style:--row-h="{rowH}px" bind:this={scroller} bind:clientHeight={viewH} onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}>
       <table>
         <thead bind:offsetHeight={headH}>
           <tr>
             <th class="sticky c-line" scope="col">Row</th>
             <th class="sticky c-id" scope="col">{idColumn?.name ?? 'Identifier'}</th>
+            <th class="c-type" scope="col">Content type</th>
             {#each columns as col (col.name)}
               {@const st = colStats[col.name]}
               <th scope="col" class:unknown={col.role === 'unknown' || col.role === 'workbench'} class:focused={focusColumn === col.name}>
@@ -130,39 +163,42 @@
           </tr>
         </thead>
         <tbody>
-          {#if start > 0}<tr class="spacer" aria-hidden="true"><td colspan={columns.length + 2} style:height="{start * ROW_H}px"></td></tr>{/if}
+          {#if start > 0}<tr class="spacer" aria-hidden="true"><td colspan={columns.length + 3} style:height="{start * rowH}px"></td></tr>{/if}
           {#each visible as row (row.line)}
             {@const idCell = row.cells[idColumn.name]}
             <tr class="r-{row.status}">
               <td class="sticky c-line num">{row.line}</td>
-              <td class="sticky c-id {row.nodes.length === 1 ? '' : 'error'}">
-                <button class="cell-btn" class:selected={selected?.row === row && selected?.column === idColumn}
-                  onclick={() => (selected = { row, column: idColumn })}>
+              <td class="sticky c-id {row.nodes.length === 1 || row.rowResolved ? '' : 'error'}" class:resolved={row.rowResolved && showResolved}>
+                <button class="cell-btn" class:selected={selected?.line === row.line && selected?.column === idColumn.name}
+                  onclick={() => (selected = { line: row.line, column: idColumn.name })}>
                   <span class="ident">{row.identifier || '(blank)'}</span>
-                  {#if !row.nodes.length}<span class="pill error">not found</span>
+                  {#if row.rowResolved}<span class="pill skip">✓ resolved</span>
+                  {:else if !row.nodes.length}<span class="pill error">not found</span>
                   {:else if row.nodes.length > 1}<span class="pill error">{row.nodes.length} nodes</span>
                   {:else if row.status === 'ok'}<span class="pill ok">✓</span>
                   {/if}
                 </button>
                 {#each row.nodes as n}
-                  <a class="node" href="{nodeBase}{n.nid}" target="_blank" rel="noopener" title="{n.title} (node/{n.nid})">↗</a>
+                  <a class="node" href="{nodeBase}{n.nid}" target="_blank" rel="noopener" title={n.title}>node/{n.nid}</a>
                 {/each}
               </td>
+              <td class="c-type"><span class="type">{row.bundle ? (bundles[row.bundle]?.label ?? row.bundle) : '—'}</span></td>
               {#each columns as col (col.name)}
                 {@const cell = row.cells[col.name]}
-                <td class="c {cell.status}" class:focused={focusColumn === col.name}>
-                  <button class="cell-btn" class:selected={selected?.row === row && selected?.column === col}
-                    title="{STATUS_LABEL[cell.status]}{cell.note ? ` — ${cell.note}` : ''}"
-                    onclick={() => (selected = { row, column: col })}>
-                    {#if GLYPH[cell.status]}<span class="glyph" aria-hidden="true">{GLYPH[cell.status]}</span>{/if}
-                    <span class="sr">{STATUS_LABEL[cell.status]}:</span>
+                <td class="c {cell.status}" class:focused={focusColumn === col.name} class:resolved={cell.resolved && showResolved}>
+                  <button class="cell-btn" class:selected={selected?.line === row.line && selected?.column === col.name}
+                    title="{cell.resolved ? 'Marked resolved' : STATUS_LABEL[cell.status]}{cell.note ? ` — ${cell.note}` : ''}"
+                    onclick={() => (selected = { line: row.line, column: col.name })}>
+                    {#if cell.resolved && showResolved}<span class="glyph" aria-hidden="true">✓</span>
+                    {:else if GLYPH[cell.status]}<span class="glyph" aria-hidden="true">{GLYPH[cell.status]}</span>{/if}
+                    <span class="sr">{cell.resolved ? 'Marked resolved' : STATUS_LABEL[cell.status]}:</span>
                     <span class="val" class:from-server={!cell.sheet.length && cell.server.length}>{text(cell)}</span>
                   </button>
                 </td>
               {/each}
             </tr>
           {/each}
-          {#if end < rows.length}<tr class="spacer" aria-hidden="true"><td colspan={columns.length + 2} style:height="{(rows.length - end) * ROW_H}px"></td></tr>{/if}
+          {#if end < rows.length}<tr class="spacer" aria-hidden="true"><td colspan={columns.length + 3} style:height="{(rows.length - end) * rowH}px"></td></tr>{/if}
         </tbody>
       </table>
     </div>
@@ -170,8 +206,10 @@
   {/if}
 </section>
 
-{#if selected}
-  <CellDetail row={selected.row} column={selected.column} {nodeBase} onclose={() => (selected = null)} />
+{#if selRow && selCol}
+  <CellDetail row={selRow} column={selCol} {nodeBase} onclose={() => (selected = null)}
+    ontogglecell={() => ontogglecell(selRow, selCol.name, selRow.cells[selCol.name])}
+    ontogglerow={() => ontogglerow(selRow)} />
 {/if}
 
 <style>
@@ -193,7 +231,7 @@
   .sw.skip { background: var(--ia-skip-bg); color: var(--ia-skip); }
   .empty { padding: 2rem; text-align: center; color: var(--ia-ok); font-weight: 600; background: var(--ia-ok-bg); border-radius: 8px; }
 
-  .scroll { overflow: auto; max-height: 70vh; border: 1px solid var(--ia-border); border-radius: 6px; }
+  .scroll { overflow: auto; overflow-anchor: none; max-height: 70vh; border: 1px solid var(--ia-border); border-radius: 6px; }
   table { border-collapse: separate; border-spacing: 0; font-size: 0.85rem; width: max-content; min-width: 100%; }
   th, td { border-right: 1px solid #ececef; border-bottom: 1px solid #ececef; padding: 0; text-align: left; vertical-align: top; background: var(--ia-surface); }
   thead th { position: sticky; top: 0; z-index: 2; background: #f8f8fa; padding: 0.45rem 0.6rem; font-weight: 600; border-bottom: 1px solid var(--ia-border); min-width: 9rem; max-width: 18rem; }
@@ -207,13 +245,18 @@
   .sticky { position: sticky; z-index: 1; }
   thead .sticky { z-index: 3; }
   .c-line { left: 0; min-width: 3.2rem; width: 3.2rem; }
-  .c-id { left: 3.2rem; min-width: 12rem; max-width: 16rem; box-shadow: 2px 0 0 #e4e4e7; }
+  .c-id { left: 3.2rem; min-width: 17rem; max-width: 22rem; box-shadow: 2px 0 0 #e4e4e7; }
   td.c-line { padding: 0.4rem 0.5rem; color: var(--ia-muted); text-align: right; }
   .num { font-variant-numeric: tabular-nums; }
   td.c-id .ident { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
-  .node { font-size: 0.8rem; text-decoration: none; padding: 0 0.5rem 0 0.1rem; }
+  .node { font-size: 0.75rem; padding: 0 0.6rem 0 0.1rem; }
+  .c-type { min-width: 9rem; white-space: nowrap; }
+  td.c-type { padding: 0 0.6rem; vertical-align: middle; }
+  .type { font-size: 0.75rem; color: var(--ia-muted); }
+  .sw.resolved, td.resolved { background: #eef7f1 !important; color: #3d7a52 !important; }
+  td.resolved .val { text-decoration: line-through; text-decoration-color: #9cc9ab; }
   td.c-id { white-space: nowrap; overflow: hidden; }
-  td.c-id .cell-btn { display: inline-flex; width: auto; max-width: calc(100% - 1.5rem); vertical-align: middle; }
+  td.c-id .cell-btn { display: inline-flex; width: auto; max-width: calc(100% - 5.5rem); vertical-align: middle; }
   tbody tr:not(.spacer) td { height: 40px; box-sizing: border-box; overflow: hidden; }
   tr.spacer td { border: 0; padding: 0; background: transparent; }
 

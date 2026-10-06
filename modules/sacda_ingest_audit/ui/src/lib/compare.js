@@ -71,11 +71,23 @@ function fieldIndex(bundles) {
   return fields;
 }
 
-/** Mapping targets for the UI, grouped. */
+/** What a column maps to without any user choice: its own name, if that is a field. */
+export function autoTarget(header, bundles) {
+  if (header in SPECIAL) return header;
+  if (WORKBENCH_ONLY.has(header)) return '';
+  return fieldIndex(bundles).has(header) ? header : '';
+}
+
+/** Mapping targets for the UI, grouped, noting fields only some content types have. */
 export function targetOptions(bundles) {
+  const all = Object.keys(bundles);
   const fields = [...fieldIndex(bundles)]
     .filter(([name]) => name !== MATCH_KEY)
-    .map(([value, f]) => ({ value, label: `${f.label} (${value})` }))
+    .map(([value, f]) => {
+      const on = all.filter((b) => value in bundles[b].fields);
+      const only = on.length < all.length ? ` · ${on.map((b) => bundles[b].label).join(', ')} only` : '';
+      return { value, label: `${f.label} (${value})${only}` };
+    })
     .sort((a, b) => a.label.localeCompare(b.label));
   return [
     { group: 'Match rows on', options: [{ value: MATCH_KEY, label: `Identifier (${MATCH_KEY})` }] },

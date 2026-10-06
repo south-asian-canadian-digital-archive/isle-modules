@@ -1,8 +1,10 @@
 <script>
-  let { row, column, nodeBase, onclose } = $props();
+  let { row, column, nodeBase, onclose, ontogglecell, ontogglerow } = $props();
 
   const LABEL = { ok: 'Matches', info: 'Only in the repository', warn: 'Differs — check it', error: 'Mismatch', skip: 'Not compared' };
   const cell = $derived(row.cells[column.name]);
+  const isRowIssue = $derived(column.role === 'identifier' && (row.noteStatus !== 'ok'));
+  const cellIssue = $derived(!!cell.resolved || ['error', 'warn'].includes(cell.status));
   const missing = $derived(new Set(cell.missing));
   const extra = $derived(new Set(cell.extra));
 
@@ -21,11 +23,19 @@
         {#if column.label && column.role !== 'unknown'}<span class="muted">({column.label})</span>{/if}
       </div>
       <div class="status">
-        <span class="pill {cell.status}">{LABEL[cell.status]}</span>
+        {#if cell.resolved}<span class="pill skip">✓ Marked resolved (was: {LABEL[cell.resolved]})</span>
+        {:else}<span class="pill {cell.status}">{LABEL[cell.status]}</span>{/if}
         {#if cell.note}<span>{cell.note}</span>{/if}
       </div>
     </div>
-    <button class="close" onclick={onclose} aria-label="Close details">×</button>
+    <div class="acts">
+      {#if isRowIssue}
+        <button class="btn secondary" onclick={ontogglerow}>{row.rowResolved ? 'Unresolve row' : 'Mark row resolved'}</button>
+      {:else if cellIssue}
+        <button class="btn secondary" onclick={ontogglecell}>{cell.resolved ? 'Unresolve' : 'Mark resolved'}</button>
+      {/if}
+      <button class="close" onclick={onclose} aria-label="Close details">×</button>
+    </div>
   </header>
 
   {#if row.notes.length && column.role === 'identifier'}
@@ -63,6 +73,8 @@
   header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
   .where { font-size: 0.85rem; }
   .status { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.35rem; }
+  .acts { display: flex; gap: 0.5rem; align-items: center; flex: none; }
+  .acts .btn { padding: 0.35em 0.8em; font-size: 0.85rem; }
   .close { font-size: 1.5rem; line-height: 1; background: none; border: 0; cursor: pointer; color: var(--ia-muted); }
   .notes { margin: 0.75rem 0 0; color: var(--ia-error); }
   .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.75rem; }

@@ -198,6 +198,9 @@ function compareRow(row, ctx) {
   else if (!node) { notes.push('No node in the repository has this identifier.'); raise(ERROR); }
   if (matches.length > 1) { notes.push(`${matches.length} nodes share this identifier; compared against the first.`); raise(ERROR); }
   if (identifier && sheetCount.get(identifier) > 1) { notes.push('This identifier appears more than once in the file.'); raise(WARN); }
+  // Row-level severity (from the notes alone), kept so a viewer can mark
+  // individual cell issues resolved and the row status can be recomputed.
+  const noteStatus = status;
 
   const bundle = node ? node.type.replace('node--', '') : null;
   const fields = bundle ? settings.bundles[bundle]?.fields ?? {} : {};
@@ -240,6 +243,7 @@ function compareRow(row, ctx) {
     line: row.__line,
     identifier,
     status,
+    noteStatus,
     notes,
     counts,
     bundle,
@@ -254,10 +258,11 @@ function skip(raw, note) {
   return { status: SKIP, sheet: v ? [v] : [], server: [], missing: [], extra: [], note };
 }
 
-function summarise(rows, columns, extra) {
+export function summarise(rows, columns, extra) {
   const s = {
     rows: rows.length,
     found: 0, notFound: 0, duplicates: 0,
+    byBundle: {},
     ok: 0, warn: 0, error: 0,
     cells: 0, cellsOk: 0,
     extra: extra.length,
@@ -266,6 +271,7 @@ function summarise(rows, columns, extra) {
   for (const c of columns) s.columns[c.name] = { ok: 0, info: 0, warn: 0, error: 0, skip: 0 };
   for (const r of rows) {
     if (r.nodes.length) s.found++; else s.notFound++;
+    if (r.bundle) s.byBundle[r.bundle] = (s.byBundle[r.bundle] ?? 0) + 1;
     if (r.nodes.length > 1) s.duplicates++;
     s[r.status]++;
     for (const [name, cell] of Object.entries(r.cells)) {
@@ -286,7 +292,7 @@ export function issuesCsv(result) {
   const out = [['line', 'identifier', 'node', 'column', 'status', 'note', 'in_file', 'in_repository']];
   for (const r of result.rows) {
     const nid = r.nodes[0]?.nid ?? '';
-    if (!r.nodes.length) out.push([r.line, r.identifier, '', '', ERROR, r.notes.join(' '), '', '']);
+    if (!r.nodes.length && !r.rowResolved) out.push([r.line, r.identifier, '', '', ERROR, r.notes.join(' '), '', '']);
     for (const [name, c] of Object.entries(r.cells)) {
       if (c.status === OK || c.status === SKIP || (!r.nodes.length)) continue;
       out.push([r.line, r.identifier, nid, name, c.status, c.note, c.sheet.join(' | '), c.server.join(' | ')]);

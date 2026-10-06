@@ -8,13 +8,26 @@ ODS, or a Google Sheets link). Each row is matched to a node by
 **`field_identifier`**, and every column is checked against what the repository
 holds.
 
-**Column mapping.** Every column can be pointed at any field, the match key
-(`field_identifier`), or the Workbench columns `parent_id` / `file` /
-`url_alias` / `published`, so sheets with headers like "Object ID" or
-"Scan file" still work. Columns named after a field map automatically, as do
-common aliases and field labels ("Identifier", "Parent ID", "File name").
-Choices are remembered per header name in the viewer's browser. The result is a table that highlights rows, columns and cells that don't
-match. Nothing is written to the repository.
+**All three content types.** Rows are looked up across every content type
+with `field_identifier` (Repository Item, Collection, Archival Component), so
+one sheet can hold a fonds, its series and its items. Results show each row's
+type, can be filtered by it, and the summary breaks matches down per type.
+Fields only some types have are labelled as such in the mapping list.
+
+**Column mapping.** The identifier column has its own picker ("Match rows on").
+Columns named after a field or a Workbench column (`parent_id`, `file`, …) are
+matched automatically and only summarised. Anything else is mapped on purpose:
+choose the column, press **+ Add**, pick the field. Common aliases ("Object ID",
+"Parent ID", "File name") arrive pre-added. Choices are remembered per header
+name in the viewer's browser. If the mapping changes after a run, a banner
+offers to re-run instead of leaving stale results on screen.
+
+**Marking issues resolved.** Click a cell, then **Mark resolved** (or **Mark row
+resolved** for a missing or duplicated identifier). Resolved issues drop out of
+the filters, counts and CSV export; **Show resolved** brings them back, struck
+through. A mark covers that exact discrepancy only (identifier, column and both
+values), so if either side changes, the issue reappears. Marks live in the
+viewer's browser (localStorage).
 
 ## How it is built
 
@@ -72,7 +85,8 @@ request pool, and the results are merged at the end. On top of that:
 
 Parsing, fetching and comparing all run in a **Web Worker**, so the page stays
 responsive. The results table is **virtualised**: only the rows in view are in
-the DOM. Measured on DEV with 5,000 rows: 488 → 327 requests, 15.9 s → 7.1 s.
+the DOM. Row height is measured rather than assumed, the window is clamped at
+the end, and scroll anchoring is off, so it doesn't jump at the bottom. Measured on DEV with 5,000 rows: 488 → 327 requests, 15.9 s → 7.1 s.
 With thousands of real matches the saving is larger: the file check and the
 child scan used to be per-item, which comes to roughly 1,600 requests versus about
 520. Raising `PHP_PM_MAX_CHILDREN` on the server is the next lever.
