@@ -46,15 +46,36 @@
   // Marks are keyed on header + mapped field (see resolved.js).
   const specOf = (name) => colSpec(result.columns.find((c) => c.name === name) ?? { name });
 
-  function update(fn) {
-    const r = new Set(marks);
-    const p = new Set(problems);
-    fn({ resolved: r, problem: p });
+  // Undo history: a snapshot of both mark sets before each change, with the
+  // cell it happened at so undo can take the viewer back there.
+  const HISTORY = 100;
+  let history = $state.raw([]);
+
+  function commit(r, p) {
     marks = r;
     problems = p;
     saveMarks(r, 'resolved');
     saveMarks(p, 'problem');
   }
+
+  function update(fn, at = null, label = '') {
+    history = [...history.slice(-(HISTORY - 1)), { marks, problems, at, label }];
+    const r = new Set(marks);
+    const p = new Set(problems);
+    fn({ resolved: r, problem: p });
+    commit(r, p);
+  }
+
+  /** Undo the last mark change; returns the cell it was made at, if any. */
+  function undoLast() {
+    const last = history.at(-1);
+    if (!last) return null;
+    history = history.slice(0, -1);
+    commit(last.marks, last.problems);
+    return last.at;
+  }
+  const undoLabel = $derived(history.at(-1)?.label ?? '');
+  const verb = (kind) => (kind === 'problem' ? 'problem' : kind === 'resolved' ? 'resolve' : 'undo');
   // kind: 'resolved' | 'problem'; scope 'all': every identical difference, 'one': this row.
   function markCell(kind, row, name, cell, scope) {
     const column = specOf(name);
@@ -62,14 +83,17 @@
     update((sets) => {
       for (const set of Object.values(sets)) for (const k of keys) set.delete(k);
       sets[kind].add(scope === 'all' ? keys[0] : keys[1]);
-    });
+    }, { line: row.line, column: name }, `${verb(kind)}${scope === 'all' ? ' (all identical)' : ''} · row ${row.line} ${name}`);
   }
   function unmarkCell(row, name, cell) {
     const column = specOf(name);
-    update((sets) => { for (const set of Object.values(sets)) { set.delete(valueKey(column, cell)); set.delete(cellKey(row, column, cell)); } });
+    update((sets) => { for (const set of Object.values(sets)) { set.delete(valueKey(column, cell)); set.delete(cellKey(row, column, cell)); } },
+      { line: row.line, column: name }, `unmark · row ${row.line} ${name}`);
   }
   function markRow(kind, row) {
-    update((sets) => { for (const set of Object.values(sets)) set.delete(rowKey(row)); if (kind) sets[kind].add(rowKey(row)); });
+    const idName = result.columns.find((c) => c.role === 'identifier')?.name;
+    update((sets) => { for (const set of Object.values(sets)) set.delete(rowKey(row)); if (kind) sets[kind].add(rowKey(row)); },
+      { line: row.line, column: idName }, `${kind ? verb(kind) : 'unmark'} row ${row.line}`);
   }
   // Bulk: mark (or with kind null, unmark) many cells in one write. Each is
   // marked for its own row only: an explicit selection means those cells.
@@ -81,7 +105,7 @@
         for (const set of Object.values(sets)) for (const k of keys) set.delete(k);
         if (kind) sets[kind].add(keys[1]);
       }
-    });
+    }, items[0] ? { line: items[0].row.line, column: items[0].name } : null, `${kind ? verb(kind) : 'unmark'} ${items.length} cell${items.length === 1 ? '' : 's'}`);
   }
   const groupSize = (name, cell) => sizes.get(valueKey(specOf(name), cell)) ?? 1;
 
@@ -251,7 +275,8 @@
     {/if}
     <Summary result={view} bundles={settings.bundles} ondownload={download} />
     <ResultsTable result={view} bundles={settings.bundles} nodeBase={settings.nodeBase}
-      bind:showResolved onmark={markCell} onunmark={unmarkCell} onmarkrow={markRow} onmarkmany={markMany} {groupSize} />
+      bind:showResolved onmark={markCell} onunmark={unmarkCell} onmarkrow={markRow} onmarkmany={markMany} {groupSize}
+      onundo={undoLast} {undoLabel} />
     {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} incomplete={view.extraIncomplete} nodeBase={settings.nodeBase} />{/if}
   {/if}
 </div>

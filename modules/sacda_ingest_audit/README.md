@@ -62,7 +62,13 @@ currently shown (the chip filters choose which kinds count as issues).
 Keys: <kbd>N</kbd>/<kbd>→</kbd> next, <kbd>P</kbd>/<kbd>←</kbd> previous,
 <kbd>R</kbd> resolve, <kbd>F</kbd> mark as problem (both apply to all
 identical unless "all N identical" is unticked; add <kbd>Shift</kbd> for this
-row only), <kbd>U</kbd> undo, <kbd>Esc</kbd> close.
+row only), <kbd>U</kbd> unmark this cell, <kbd>Esc</kbd> close.
+
+Cells marked during the session stay in the Previous / Next walk (and their
+rows stay listed), so you can step back to something you just marked.
+**↶ Undo** (toolbar, panel and bulk bar, or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Z</kbd>)
+reverts the last mark change of any kind (single, all identical, bulk, whole
+column) and jumps back to where it was made; it goes back up to 100 steps.
 
 Marks are keyed on the column's header *and the field it is mapped to*, plus
 both values. So they survive a remap and re-run for every column whose mapping

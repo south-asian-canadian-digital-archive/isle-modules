@@ -3,7 +3,7 @@
   import CellDetail from './CellDetail.svelte';
   import { difference } from '../lib/resolved.js';
 
-  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize } = $props();
+  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize, onundo, undoLabel = '' } = $props();
 
   // Virtual scrolling: rows have a fixed height, and only the ones in view
   // (plus OVERSCAN either side) are in the DOM; spacer rows stand in for the
@@ -43,9 +43,25 @@
   let autoAdvance = $state(true);
   const navKinds = $derived(kinds.length ? kinds.filter((k) => k !== 'resolved' || showResolved) : ['error', 'warn']);
 
+  // Cells marked during this session stay in the Previous/Next walk, so you
+  // can step back to what you just marked and change your mind.
+  let touched = $state(new Set()); // "line|column"
+  const touchedLines = $derived(new Set([...touched].map((k) => Number(k.slice(0, k.indexOf('|'))))));
+  const touch = (pairs) => { const t = new Set(touched); for (const [line, col] of pairs) t.add(`${line}|${col}`); touched = t; };
+
   function qualifies(row, name, skip) {
     const c = row.cells[name];
-    return !!c && !skip?.(row, name, c) && navKinds.includes(kindOf(c));
+    if (!c || skip?.(row, name, c)) return false;
+    return navKinds.includes(kindOf(c)) || touched.has(`${row.line}|${name}`);
+  }
+
+  function undo() {
+    const at = onundo?.();
+    if (at) {
+      bulk = new Set();
+      if (!rows.some((r) => r.line === at.line)) filter = 'all';
+      go(at);
+    }
   }
 
   function findFrom(line, column, dir, skip) {
@@ -156,6 +172,7 @@
 
   function bulkMark(kind, items = kind ? bulkOpen : bulkMarked) {
     if (!items.length) return;
+    touch(items.map(({ row, name }) => [row.line, name]));
     onmarkmany(kind, items.map(({ row, name, cell }) => ({ row, name, cell })));
     bulk = new Set();
   }
@@ -175,12 +192,17 @@
   }
   function columnAction(name, action) {
     menuCol = '';
-    if (action === 'select') bulk = new Set(columnItems(name, 'open').map(({ row }) => `${row.line}|${name}`));
-    else if (action === 'undo') onmarkmany(null, columnItems(name, 'marked'));
-    else onmarkmany(action, columnItems(name, 'open'));
+    if (action === 'select') { bulk = new Set(columnItems(name, 'open').map(({ row }) => `${row.line}|${name}`)); return; }
+    const items = columnItems(name, action === 'undo' ? 'marked' : 'open');
+    touch(items.map(({ row }) => [row.line, name]));
+    onmarkmany(action === 'undo' ? null : action, items);
   }
 
   function bulkKeys(e) {
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !e.target.closest?.('input, select, textarea')) {
+      if (undoLabel) { undo(); e.preventDefault(); }
+      return;
+    }
     if (selected || !bulk.size || e.target.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (k === 'r') bulkMark('resolved');
@@ -202,6 +224,7 @@
       ? (r, n, c) => n === name && JSON.stringify(difference(c)) === sig
       : (r, n) => r.line === row.line && n === name;
     const target = autoAdvance ? findFrom(row.line, name, 1, covered) : null;
+    touch([[row.line, name]]);
     onmark(kind, row, name, cell, scope);
     if (target) go(target);
   }
@@ -209,6 +232,7 @@
   function markRowAndAdvance(kind) {
     const row = selRow;
     const target = kind && autoAdvance ? findFrom(row.line, selCol.name, 1, (r) => r.line === row.line) : null;
+    touch([[row.line, selCol.name]]);
     onmarkrow(kind, row);
     if (target) go(target);
   }
@@ -225,8 +249,10 @@
   const rows = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return result.rows.filter((r) => {
-      if (filter === 'problems' && r.status === 'ok' && !(showResolved && hasResolved(r))) return false;
-      if (filter === 'errors' && r.status !== 'error') return false;
+      // Rows marked this session stay listed so Previous can return to them.
+      const kept = touchedLines.has(r.line);
+      if (filter === 'problems' && r.status === 'ok' && !kept && !(showResolved && hasResolved(r))) return false;
+      if (filter === 'errors' && r.status !== 'error' && !kept) return false;
       if (filter === 'missing' && (r.nodes.length || r.lookupFailed || r.rowFlagged || (r.rowResolved && !showResolved))) return false;
       if (typeFilter && r.bundle !== typeFilter) return false;
       if (kinds.length) {
@@ -319,6 +345,9 @@
     {/if}
     <label class="check"><input type="checkbox" bind:checked={problemColumnsOnly} /> Only columns with issues</label>
     <label class="check"><input type="checkbox" bind:checked={showResolved} /> Show resolved{result.resolvedCount ? ` (${result.resolvedCount})` : ''}</label>
+    {#if undoLabel}
+      <button class="btn secondary undo" onclick={undo} title="Undo: {undoLabel} (Ctrl/Cmd+Z)">↶ Undo</button>
+    {/if}
     <span class="muted shown">{rows.length.toLocaleString()} rows</span>
   </div>
 
@@ -449,6 +478,7 @@
     <button class="btn problem" disabled={!bulkOpen.length} onclick={() => bulkMark('problem')}>⚑ Problem {bulkOpen.length}</button>
     <button class="btn secondary" disabled={!bulkMarked.length} onclick={() => bulkMark(null)}>Undo {bulkMarked.length}</button>
     <button class="btn secondary" onclick={() => (bulk = new Set())}>Clear</button>
+    {#if undoLabel}<button class="btn secondary" onclick={undo} title="Undo: {undoLabel}">↶ Undo last</button>{/if}
     <span class="keys muted"><kbd>R</kbd> resolve · <kbd>F</kbd> problem · <kbd>U</kbd> undo · <kbd>Esc</kbd> clear</span>
   </div>
 {/if}
@@ -457,6 +487,7 @@
   <CellDetail row={selRow} column={selCol} {nodeBase} onclose={() => (selected = null)}
     groupSize={groupSize(selCol.name, selRow.cells[selCol.name])}
     onmark={markAndAdvance} onmarkrow={markRowAndAdvance} {position} onnext={next} onprev={prev} bind:autoAdvance bind:onlyThisRow
+    onundolast={undo} {undoLabel}
     onunmark={() => onunmark(selRow, selCol.name, selRow.cells[selCol.name])} />
 {/if}
 
@@ -564,4 +595,5 @@
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
   .shown { font-size: 0.85rem; margin-left: auto; }
+  .btn.undo { padding: 0.3em 0.8em; font-size: 0.85rem; }
 </style>

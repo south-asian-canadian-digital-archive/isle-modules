@@ -2,6 +2,7 @@
   let {
     row, column, nodeBase, onclose, onmark, onunmark, onmarkrow, groupSize = 1,
     position = null, onnext, onprev, autoAdvance = $bindable(true), onlyThisRow = $bindable(false),
+    onundolast, undoLabel = '',
   } = $props();
 
   const LABEL = { ok: 'Matches', info: 'Only in the repository', warn: 'Differs — check it', error: 'Mismatch', skip: 'Not compared' };
@@ -104,8 +105,9 @@
       {#if position?.index}Issue {position.index} of {position.total}{:else if position?.total}{position.total} issues{:else}No issues in view{/if}
     </span>
     <button class="btn secondary" onclick={onnext} disabled={!position?.total} aria-label="Next issue">Next →</button>
+    {#if undoLabel}<button class="btn secondary" onclick={onundolast} title="Undo: {undoLabel} (Ctrl/Cmd+Z)">↶ Undo last</button>{/if}
     <label class="auto"><input type="checkbox" bind:checked={autoAdvance} /> Go to next after marking</label>
-    <span class="keys muted"><kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>R</kbd> resolve · <kbd>F</kbd> problem · <kbd>⇧</kbd> this row only · <kbd>U</kbd> undo · <kbd>Esc</kbd></span>
+    <span class="keys muted"><kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>R</kbd> resolve · <kbd>F</kbd> problem · <kbd>⇧</kbd> this row only · <kbd>U</kbd> unmark · <kbd>⌘Z</kbd> undo · <kbd>Esc</kbd></span>
   </footer>
 </aside>
 
