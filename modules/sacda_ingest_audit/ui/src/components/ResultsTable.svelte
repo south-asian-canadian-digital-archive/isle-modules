@@ -3,7 +3,7 @@
   import CellDetail from './CellDetail.svelte';
   import { difference } from '../lib/resolved.js';
 
-  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, groupSize } = $props();
+  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize } = $props();
 
   // Virtual scrolling: rows have a fixed height, and only the ones in view
   // (plus OVERSCAN either side) are in the DOM; spacer rows stand in for the
@@ -104,6 +104,92 @@
 
   const next = () => go(selected && findFrom(selected.line, selected.column, 1));
   const prev = () => go(selected && findFrom(selected.line, selected.column, -1));
+
+  // Bulk selection: Shift+click selects the rectangle from the last clicked
+  // cell, Cmd/Ctrl+click toggles single cells. Only issue cells (and already
+  // marked ones, for undo) are acted on.
+  let bulk = $state(new Set()); // "line|column"
+  let anchor = $state(null);    // { line, column }
+  let menuCol = $state('');     // column whose ⋯ menu is open
+
+  const isActionable = (cell) => !!cell && (cell.resolved || cell.flagged || ['error', 'warn'].includes(cell.status));
+  const bulkItems = $derived([...bulk].map((k) => {
+    const i = k.indexOf('|');
+    const row = byLine.get(Number(k.slice(0, i)));
+    const name = k.slice(i + 1);
+    return row && isActionable(row.cells[name]) ? { row, name, cell: row.cells[name] } : null;
+  }).filter(Boolean));
+  const bulkOpen = $derived(bulkItems.filter((x) => !x.cell.resolved && !x.cell.flagged));
+  const bulkMarked = $derived(bulkItems.filter((x) => x.cell.resolved || x.cell.flagged));
+
+  function cellClick(e, row, name) {
+    const here = { line: row.line, column: name };
+    if (e.shiftKey && anchor) {
+      const r0 = rows.findIndex((r) => r.line === anchor.line);
+      const r1 = rows.findIndex((r) => r.line === row.line);
+      const c0 = columns.findIndex((c) => c.name === anchor.column);
+      const c1 = columns.findIndex((c) => c.name === name);
+      if (r0 < 0 || c0 < 0) { bulk = new Set([`${row.line}|${name}`]); anchor = here; return; }
+      const next = new Set(e.metaKey || e.ctrlKey ? bulk : []);
+      for (let ri = Math.min(r0, r1); ri <= Math.max(r0, r1); ri++) {
+        for (let ci = Math.min(c0, c1); ci <= Math.max(c0, c1); ci++) {
+          if (isActionable(rows[ri].cells[columns[ci].name])) next.add(`${rows[ri].line}|${columns[ci].name}`);
+        }
+      }
+      bulk = next;
+      selected = null;
+    }
+    else if (e.metaKey || e.ctrlKey) {
+      const k = `${row.line}|${name}`;
+      const next = new Set(bulk);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      bulk = next;
+      anchor = here;
+      selected = null;
+    }
+    else {
+      bulk = new Set();
+      anchor = here;
+      selected = here;
+    }
+  }
+
+  function bulkMark(kind, items = kind ? bulkOpen : bulkMarked) {
+    if (!items.length) return;
+    onmarkmany(kind, items.map(({ row, name, cell }) => ({ row, name, cell })));
+    bulk = new Set();
+  }
+
+  // Issue (or marked) cells of one column, across every row that passes the
+  // content-type filter and search. The status filters are ignored on
+  // purpose: they hide rows whose issues are already marked, and "undo the
+  // whole column" has to reach those too.
+  const columnScope = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    return result.rows.filter((r) => (!typeFilter || r.bundle === typeFilter)
+      && (!q || `${r.identifier} ${r.title}`.toLowerCase().includes(q)));
+  });
+  function columnItems(name, which) {
+    return columnScope.map((row) => ({ row, name, cell: row.cells[name] }))
+      .filter(({ cell }) => isActionable(cell) && (which === 'marked' ? (cell.resolved || cell.flagged) : !(cell.resolved || cell.flagged)));
+  }
+  function columnAction(name, action) {
+    menuCol = '';
+    if (action === 'select') bulk = new Set(columnItems(name, 'open').map(({ row }) => `${row.line}|${name}`));
+    else if (action === 'undo') onmarkmany(null, columnItems(name, 'marked'));
+    else onmarkmany(action, columnItems(name, 'open'));
+  }
+
+  function bulkKeys(e) {
+    if (selected || !bulk.size || e.target.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === 'r') bulkMark('resolved');
+    else if (k === 'f') bulkMark('problem');
+    else if (k === 'u') bulkMark(null);
+    else if (e.key === 'Escape') bulk = new Set();
+    else return;
+    e.preventDefault();
+  }
 
   // Mark (resolved or problem), then jump to the next issue the mark did not cover.
   let onlyThisRow = $state(false);
@@ -267,7 +353,24 @@
             {#each columns as col (col.name)}
               {@const st = colStats[col.name]}
               <th scope="col" class:unknown={col.role === 'unknown' || col.role === 'workbench'} class:focused={focusColumn === col.name}>
-                <div class="h-name">{col.name}</div>
+                <div class="h-top">
+                  <div class="h-name">{col.name}</div>
+                  {#if col.role !== 'unknown' && col.role !== 'workbench'}
+                    <button class="h-menu-btn" aria-label="Actions for column {col.name}" aria-expanded={menuCol === col.name}
+                      onclick={() => (menuCol = menuCol === col.name ? '' : col.name)}>⋯</button>
+                  {/if}
+                </div>
+                {#if menuCol === col.name}
+                  {@const open = columnItems(col.name, 'open').length}
+                  {@const done = columnItems(col.name, 'marked').length}
+                  <div class="h-menu" role="menu">
+                    <button role="menuitem" disabled={!open} onclick={() => columnAction(col.name, 'resolved')}>✓ Resolve all {open} issue{open === 1 ? '' : 's'} in this column</button>
+                    <button role="menuitem" disabled={!open} onclick={() => columnAction(col.name, 'problem')}>⚑ Mark all {open} as problems</button>
+                    <button role="menuitem" disabled={!open} onclick={() => columnAction(col.name, 'select')}>Select these {open} for review</button>
+                    <button role="menuitem" disabled={!done} onclick={() => columnAction(col.name, 'undo')}>Undo {done} mark{done === 1 ? '' : 's'} in this column</button>
+                    <p class="muted">All rows{typeFilter || query.trim() ? ' matching the type filter / search' : ''}, including ones hidden by the status filters.</p>
+                  </div>
+                {/if}
                 <div class="h-meta">
                   {#if col.role === 'unknown'}<span class="pill skip" title="This column is not mapped to a field, so it was not compared">not mapped</span>
                   {:else if col.role === 'workbench'}<span class="pill skip">workbench option</span>
@@ -311,12 +414,13 @@
               <td class="c-type"><span class="type">{row.bundle ? (bundles[row.bundle]?.label ?? row.bundle) : '—'}</span></td>
               {#each columns as col (col.name)}
                 {@const cell = row.cells[col.name]}
-                <td data-cell="{row.line}|{col.name}" class="c {cell.status}" class:focused={focusColumn === col.name} class:resolved={cell.resolved && showResolved}
+                <td data-cell="{row.line}|{col.name}" class="c {cell.status}" class:focused={focusColumn === col.name}
+                  class:bulk={bulk.has(`${row.line}|${col.name}`)} class:resolved={cell.resolved && showResolved}
                   class:flagged={cell.flagged && kinds.includes('problem')}
                   class:dim={kinds.length && !kinds.includes(kindOf(cell))}>
                   <button class="cell-btn" class:selected={selected?.line === row.line && selected?.column === col.name}
                     title="{cell.resolved ? 'Marked resolved' : STATUS_LABEL[cell.status]}{cell.note ? ` — ${cell.note}` : ''}"
-                    onclick={() => (selected = { line: row.line, column: col.name })}>
+                    onclick={(e) => cellClick(e, row, col.name)}>
                     {#if cell.flagged && kinds.includes('problem')}<span class="glyph" aria-hidden="true">⚑</span>
                     {:else if cell.resolved && showResolved}<span class="glyph" aria-hidden="true">✓</span>
                     {:else if GLYPH[cell.status]}<span class="glyph" aria-hidden="true">{GLYPH[cell.status]}</span>{/if}
@@ -334,6 +438,20 @@
 
   {/if}
 </section>
+
+<svelte:window onkeydown={bulkKeys} onclick={(e) => { if (menuCol && !e.target.closest?.('.h-menu, .h-menu-btn')) menuCol = ''; }} />
+
+{#if bulk.size}
+  <div class="bulkbar" role="region" aria-label="Bulk actions">
+    <strong>{bulkItems.length} selected</strong>
+    <span class="muted">{bulkOpen.length} open{bulkMarked.length ? ` · ${bulkMarked.length} already marked` : ''}</span>
+    <button class="btn" disabled={!bulkOpen.length} onclick={() => bulkMark('resolved')}>✓ Resolve {bulkOpen.length}</button>
+    <button class="btn problem" disabled={!bulkOpen.length} onclick={() => bulkMark('problem')}>⚑ Problem {bulkOpen.length}</button>
+    <button class="btn secondary" disabled={!bulkMarked.length} onclick={() => bulkMark(null)}>Undo {bulkMarked.length}</button>
+    <button class="btn secondary" onclick={() => (bulk = new Set())}>Clear</button>
+    <span class="keys muted"><kbd>R</kbd> resolve · <kbd>F</kbd> problem · <kbd>U</kbd> undo · <kbd>Esc</kbd> clear</span>
+  </div>
+{/if}
 
 {#if selRow && selCol}
   <CellDetail row={selRow} column={selCol} {nodeBase} onclose={() => (selected = null)}
@@ -360,6 +478,30 @@
   .sw.off { opacity: 0.45; }
   .sw:focus-visible { outline: 2px solid var(--ia-accent); outline-offset: 1px; }
   td.dim { opacity: 0.35; }
+  td.bulk { box-shadow: inset 0 0 0 2px var(--ia-accent); background-image: linear-gradient(rgb(0 62 204 / 0.08), rgb(0 62 204 / 0.08)); }
+  .cell-btn { user-select: none; }
+  .h-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.25rem; }
+  .h-menu-btn { font: inherit; line-height: 1; padding: 0 0.3rem; border: 0; border-radius: 4px; background: none; color: var(--ia-muted); cursor: pointer; }
+  .h-menu-btn:hover, .h-menu-btn[aria-expanded='true'] { background: #e9e9ee; color: inherit; }
+  .h-menu {
+    position: absolute; z-index: 20; margin-top: 0.25rem; min-width: 17rem;
+    display: flex; flex-direction: column; padding: 0.3rem; font-weight: 400;
+    background: var(--ia-surface); border: 1px solid var(--ia-border); border-radius: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+  }
+  .h-menu button { font: inherit; text-align: left; padding: 0.4rem 0.6rem; border: 0; border-radius: 5px; background: none; cursor: pointer; white-space: nowrap; }
+  .h-menu button:hover:not(:disabled) { background: var(--ia-subtle); }
+  .h-menu button:disabled { color: var(--ia-skip); cursor: default; }
+  .h-menu p { margin: 0.25rem 0.6rem 0.15rem; font-size: 0.75rem; hyphens: manual; white-space: normal; max-width: 17rem; }
+  .bulkbar {
+    position: fixed; z-index: 500; left: 50%; bottom: 1rem; transform: translateX(-50%);
+    display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; max-width: calc(100vw - 2rem);
+    padding: 0.6rem 0.9rem; background: var(--ia-surface); border: 1px solid var(--ia-border); border-radius: 10px;
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.18); font-size: 0.875rem;
+  }
+  .bulkbar .btn { padding: 0.3em 0.8em; font-size: 0.85rem; }
+  .bulkbar .btn.problem { background: #6b3fa0; border-color: #6b3fa0; }
+  .bulkbar .keys { font-size: 0.75rem; }
+  .bulkbar kbd { font: inherit; font-size: 0.7rem; padding: 0 0.3em; border: 1px solid var(--ia-border); border-bottom-width: 2px; border-radius: 3px; background: var(--ia-subtle); }
   .sw.problem, td.flagged { background: #f3ecfb !important; color: #6b3fa0 !important; }
   .sw.problem { border-color: #d8c6ef; }
   .pill.problem { background: #f3ecfb; color: #6b3fa0; }

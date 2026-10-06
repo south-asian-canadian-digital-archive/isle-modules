@@ -71,6 +71,18 @@
   function markRow(kind, row) {
     update((sets) => { for (const set of Object.values(sets)) set.delete(rowKey(row)); if (kind) sets[kind].add(rowKey(row)); });
   }
+  // Bulk: mark (or with kind null, unmark) many cells in one write. Each is
+  // marked for its own row only: an explicit selection means those cells.
+  function markMany(kind, items) {
+    update((sets) => {
+      for (const { row, name, cell } of items) {
+        const column = specOf(name);
+        const keys = [valueKey(column, cell), cellKey(row, column, cell)];
+        for (const set of Object.values(sets)) for (const k of keys) set.delete(k);
+        if (kind) sets[kind].add(keys[1]);
+      }
+    });
+  }
   const groupSize = (name, cell) => sizes.get(valueKey(specOf(name), cell)) ?? 1;
 
   // The result belongs to the mapping/options it was run with; say so when
@@ -239,7 +251,7 @@
     {/if}
     <Summary result={view} bundles={settings.bundles} ondownload={download} />
     <ResultsTable result={view} bundles={settings.bundles} nodeBase={settings.nodeBase}
-      bind:showResolved onmark={markCell} onunmark={unmarkCell} onmarkrow={markRow} {groupSize} />
+      bind:showResolved onmark={markCell} onunmark={unmarkCell} onmarkrow={markRow} onmarkmany={markMany} {groupSize} />
     {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} incomplete={view.extraIncomplete} nodeBase={settings.nodeBase} />{/if}
   {/if}
 </div>

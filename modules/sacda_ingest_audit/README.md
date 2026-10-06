@@ -46,6 +46,14 @@ problems back into view. Resolved issues are never exported. Problem marks
 use the same keys as resolved ones (difference-based, follow the mapping)
 and are stored separately in the browser.
 
+**Bulk marking.** Shift+click selects the rectangle from the last clicked
+cell; Cmd/Ctrl+click adds or removes single cells. A bar then offers
+✓ Resolve / ⚑ Problem / Undo / Clear (keys R / F / U / Esc) for the issues in
+the selection. Each column header's **⋯** menu resolves, marks as problems,
+selects or un-marks every issue in that column, across all rows that pass the
+content-type filter and search, including rows the status filters hide. Bulk
+marks are per row, not "all identical".
+
 **Reviewing quickly.** After a resolve the panel jumps to the next issue,
 down the same column first, then on to the next column, skipping whatever
 that resolve just covered (untick "Go to next after resolving" to stay
@@ -112,7 +120,8 @@ reports as "not found".
 | `parent_id` | parent node's `field_identifier` | **error** (wrong place in hierarchy) |
 | `file` | basename of the OriginalFile media's file; Drupal's `_0` collision rename tolerated | checked **both ways**: file named but no Original File media → **error**; file blank but media present → **error**; extra originals → **error** |
 | text / string / number / link / geolocation | whitespace ignored entirely ("Paldi,BC" = "Paldi, BC", including non-breaking/zero-width spaces and `&nbsp;`); case, accents and quote style relaxed as a fallback; 255-char truncation tolerated | **error** |
-| taxonomy refs, typed relations, EDTF, authority links | term ID, URI or name (`vocab:` prefix stripped); relator must agree | **warning** ("fuzzy", since Workbench reconciles these). *Strict* turns them into errors |
+| dates (EDTF) | by meaning: both sides are read as the day range they cover, so CA notations (`193-`, `1930s`, `19--`, `ca. 1950`, `July 14, 1948`, `1919 - 1949`, `before 1850`) equal their EDTF forms (`193X?`, `19XX`, `1950~`, `1948-07-14`, `1919/1949`, `../1850`); `?`/`~`/`%` qualifiers ignored | **warning** |
+| taxonomy refs, typed relations, authority links | term ID, URI or name (`vocab:` prefix stripped); relator must agree | **warning** ("fuzzy", since Workbench reconciles these). *Strict* turns them into errors |
 | `id`, `media_use_tid`, … | Workbench options, not stored | not compared |
 | anything else | not a field on any content type | not compared, greyed header |
 

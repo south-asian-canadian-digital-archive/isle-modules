@@ -157,6 +157,8 @@ export function planColumns(headers, bundles, mapping = suggestMapping(headers, 
 // Normalisation
 
 // Zero-width characters that sheets and pasted text carry invisibly.
+import { sameDates } from './edtf.js';
+
 const ZERO_WIDTH = /[\u200B-\u200D\u2060\uFEFF]/g;
 const ENTITIES = { nbsp: ' ', amp: '&', quot: '"', apos: "'", '#39': "'", lt: '<', gt: '>' };
 
@@ -327,6 +329,9 @@ function matcher(kind, column, field) {
       return (t, item) => (parseBool(t) === item.bool ? 'exact' : null);
     case 'number':
       return (t, item) => (Number(t) === Number(item.text) ? 'exact' : null);
+    case 'edtf':
+      // By meaning: "193-" (CA) and "193X?" (EDTF) are the same 1930s.
+      return (t, item) => matchText(t, item.text) ?? (sameDates(t, item.text) ? 'loose' : null);
     case 'file':
       return (t, item) => {
         const want = basename(t);
@@ -396,7 +401,11 @@ export function compareCell(raw, items, column, { field, multi, delimiter = '|',
   result.extra = items.filter((_, j) => !used.has(j)).map((i) => i.display);
 
   if (!result.missing.length && !result.extra.length) {
-    if (normalised) result.note = 'Matches after ignoring whitespace, case, accents or quote style.';
+    if (normalised) {
+      result.note = column.kind === 'edtf'
+        ? 'Same dates once both are read as EDTF (notation and ?/~ qualifiers ignored).'
+        : 'Matches after ignoring whitespace, case, accents or quote style.';
+    }
     return result;
   }
   const fuzzy = FUZZY_KINDS.has(column.kind) && !strict;

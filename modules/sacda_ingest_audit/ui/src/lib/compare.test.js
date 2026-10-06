@@ -29,6 +29,15 @@ describe('compareCell', () => {
     expect(compareCell('2021_04_SF1 ', [{ display: '', identifier: '2021_04_SF1', nid: 1 }], col('node', 'parent'), { multi: true }).status).toBe(OK);
   });
 
+  test('dates match by EDTF meaning, not text', () => {
+    const d = (sheet, server) => compareCell(sheet, [{ display: server, text: server }], col('edtf'), { multi: true }).status;
+    expect(d('193-', '193X?')).toBe(OK);
+    const multi = compareCell('1930s|ca. 1950', [{ display: '1950~', text: '1950~' }, { display: '193X', text: '193X' }], col('edtf'), { multi: true });
+    expect(multi.status).toBe(OK);
+    expect(multi.note).toMatch(/EDTF/);
+    expect(d('1935', '193X?')).toBe(WARN);
+  });
+
   test('blank in file but set on server is informational', () => {
     expect(compareCell('', [{ display: 'x', text: 'x' }], col('text')).status).toBe(INFO);
   });
