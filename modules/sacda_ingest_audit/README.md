@@ -22,6 +22,12 @@ choose the column, press **+ Add**, pick the field. Common aliases ("Object ID",
 name in the viewer's browser. If the mapping changes after a run, a banner
 offers to re-run instead of leaving stale results on screen.
 
+**Filtering by kind of cell.** The legend chips (✕ mismatch, ! term/date
+differs, i blank in file, not compared, ✓ resolved) are filters, each with
+its cell count. Select one or more to see only the rows containing such
+cells; other cells are dimmed. They combine with the column focus (click a
+column's issue count), the content-type filter and search.
+
 **Marking issues resolved.** Click a cell. If the same discrepancy (same
 column, same file value, same repository value) occurs in other rows, the
 panel offers **Mark all N identical resolved**, plus **Only this row**.

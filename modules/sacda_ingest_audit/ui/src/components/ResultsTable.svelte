@@ -22,6 +22,17 @@
   let headH = $state(0);
   let rowH = $state(40);
   let typeFilter = $state('');
+  // Cell-kind filter (the legend chips): show rows containing at least one
+  // cell of any selected kind; other cells are dimmed.
+  let kinds = $state([]);
+  const KINDS = [
+    ['error', '✕ mismatch'],
+    ['warn', '! term or date differs, check it'],
+    ['info', 'i blank in file, set in repository'],
+    ['skip', 'not compared'],
+    ['resolved', '✓ marked resolved'],
+  ];
+  const kindOf = (cell) => (cell.resolved ? 'resolved' : cell.status);
   // Selection by row line + column name, so it survives re-runs and resolve toggles.
   let selected = $state(null); // { line, column }
 
@@ -39,7 +50,11 @@
       if (filter === 'errors' && r.status !== 'error') return false;
       if (filter === 'missing' && (r.nodes.length || r.lookupFailed || (r.rowResolved && !showResolved))) return false;
       if (typeFilter && r.bundle !== typeFilter) return false;
-      if (focusColumn && !['error', 'warn'].includes(r.cells[focusColumn]?.status)) return false;
+      if (kinds.length) {
+        const names = focusColumn ? [focusColumn] : columns.map((c) => c.name);
+        if (!names.some((n) => r.cells[n] && kinds.includes(kindOf(r.cells[n])))) return false;
+      }
+      else if (focusColumn && !['error', 'warn'].includes(r.cells[focusColumn]?.status)) return false;
       if (q && !`${r.identifier} ${r.title}`.toLowerCase().includes(q)) return false;
       return true;
     });
@@ -69,7 +84,7 @@
 
   // Any filter change goes back to the top.
   $effect(() => {
-    filter; query; focusColumn; typeFilter;
+    filter; query; focusColumn; typeFilter; kinds;
     if (scroller) scroller.scrollTop = 0;
     scrollTop = 0;
   });
@@ -85,6 +100,19 @@
     if (cell.sheet.length) return cell.sheet.join(' | ');
     if (cell.server.length) return cell.server.join(' | ');
     return '';
+  }
+
+  // Cells of each kind across the visible columns (resolved only counts when shown).
+  const kindCounts = $derived.by(() => {
+    const n = { error: 0, warn: 0, info: 0, skip: 0, resolved: 0 };
+    for (const r of result.rows) for (const c of columns) { const cell = r.cells[c.name]; if (cell) n[kindOf(cell)]++; }
+    return n;
+  });
+
+  function toggleKind(k) {
+    kinds = kinds.includes(k) ? kinds.filter((x) => x !== k) : [...kinds, k];
+    if (kinds.length) filter = 'all';
+    if (k === 'resolved' && kinds.includes(k)) showResolved = true;
   }
 
   function toggleFocus(name) {
@@ -121,12 +149,14 @@
     </p>
   {/if}
 
-  <div class="legend muted">
-    <span class="sw error">✕ mismatch</span>
-    <span class="sw warn">! term or date differs, check it</span>
-    <span class="sw info">i blank in file, set in repository</span>
-    <span class="sw skip">not compared</span>
-    <span class="sw resolved">✓ marked resolved</span>
+  <div class="legend muted" role="group" aria-label="Show rows with cells of kind">
+    {#each KINDS as [k, label]}
+      <button class="sw {k}" class:on={kinds.includes(k)} class:off={kinds.length && !kinds.includes(k)}
+        aria-pressed={kinds.includes(k)} onclick={() => toggleKind(k)} title="Show only rows with {label.replace(/^\S+ /, '')} cells">
+        {label} <span class="n">{kindCounts[k].toLocaleString()}</span>
+      </button>
+    {/each}
+    {#if kinds.length}<button class="link" onclick={() => (kinds = [])}>Clear</button>{/if}
     <span>Click a cell to compare values and mark it resolved.</span>
   </div>
 
@@ -186,7 +216,8 @@
               <td class="c-type"><span class="type">{row.bundle ? (bundles[row.bundle]?.label ?? row.bundle) : '—'}</span></td>
               {#each columns as col (col.name)}
                 {@const cell = row.cells[col.name]}
-                <td class="c {cell.status}" class:focused={focusColumn === col.name} class:resolved={cell.resolved && showResolved}>
+                <td class="c {cell.status}" class:focused={focusColumn === col.name} class:resolved={cell.resolved && showResolved}
+                  class:dim={kinds.length && !kinds.includes(kindOf(cell))}>
                   <button class="cell-btn" class:selected={selected?.line === row.line && selected?.column === col.name}
                     title="{cell.resolved ? 'Marked resolved' : STATUS_LABEL[cell.status]}{cell.note ? ` — ${cell.note}` : ''}"
                     onclick={() => (selected = { line: row.line, column: col.name })}>
@@ -227,7 +258,12 @@
   .focus { margin: 0 0 0.5rem; }
   .link { font: inherit; background: none; border: 0; color: var(--ia-accent); text-decoration: underline; cursor: pointer; padding: 0; }
   .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.8rem; margin-bottom: 0.6rem; align-items: center; }
-  .sw { padding: 0.1em 0.5em; border-radius: 3px; border: 1px solid transparent; }
+  .sw { font: inherit; padding: 0.15em 0.55em; border-radius: 4px; border: 1px solid transparent; cursor: pointer; }
+  .sw .n { font-variant-numeric: tabular-nums; opacity: 0.7; margin-left: 0.15em; }
+  .sw.on { box-shadow: 0 0 0 2px var(--ia-accent); font-weight: 600; }
+  .sw.off { opacity: 0.45; }
+  .sw:focus-visible { outline: 2px solid var(--ia-accent); outline-offset: 1px; }
+  td.dim { opacity: 0.35; }
   .sw.error { background: var(--ia-error-bg); color: var(--ia-error); border-color: var(--ia-error-line); }
   .sw.warn { background: var(--ia-warn-bg); color: var(--ia-warn); border-color: var(--ia-warn-line); }
   .sw.info { background: var(--ia-info-bg); color: var(--ia-info); }
