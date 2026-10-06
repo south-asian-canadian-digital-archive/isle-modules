@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from 'svelte';
   let {
     row, column, nodeBase, onclose, onmark, onunmark, onmarkrow, groupSize = 1,
     position = null, onnext, onprev, autoAdvance = $bindable(true), onlyThisRow = $bindable(false),
@@ -24,6 +25,66 @@
 
   // Marking only acts on something still open; changing an existing mark
   // goes through Unmark first, so a stray key press never flips it.
+  // Dragging: the top strip is the handle. Position is remembered per
+  // browser; double-click the strip to send the panel back to its corner.
+  const POS_KEY = 'sacdaIngestAudit.panelPos';
+  let panel = $state();
+  let pos = $state(loadPos());
+  // On open, pull a remembered position back on screen (depends on the
+  // panel only; writes only when the position actually has to change).
+  $effect(() => {
+    if (!panel) return;
+    const p = untrack(() => pos);
+    if (!p) return;
+    const c = clamp(p.x, p.y);
+    if (c.x !== p.x || c.y !== p.y) pos = c;
+  });
+  let drag = null;
+  function loadPos() {
+    try { return JSON.parse(localStorage.getItem(POS_KEY) ?? 'null'); } catch { return null; }
+  }
+  function savePos() {
+    try { if (pos) localStorage.setItem(POS_KEY, JSON.stringify(pos)); else localStorage.removeItem(POS_KEY); } catch { /* storage unavailable */ }
+  }
+  // Drupal's admin toolbar is fixed at the top and sits above everything;
+  // body padding-top is its height. Never let the handle slide under it,
+  // or the panel can't be grabbed again.
+  function topLimit() {
+    return (parseFloat(getComputedStyle(document.body).paddingTop) || 0) + 8;
+  }
+  function clamp(x, y) {
+    const w = panel?.offsetWidth ?? 600;
+    const h = panel?.offsetHeight ?? 400;
+    const minY = topLimit();
+    return {
+      x: Math.min(Math.max(8, x), Math.max(8, window.innerWidth - w - 8)),
+      y: Math.min(Math.max(minY, y), Math.max(minY, window.innerHeight - h - 8)),
+    };
+  }
+  function dragStart(e) {
+    if (e.button !== 0 || e.target.closest('button, a, input, select')) return;
+    const r = panel.getBoundingClientRect();
+    drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function dragMove(e) {
+    if (drag) pos = clamp(e.clientX - drag.dx, e.clientY - drag.dy);
+  }
+  function dragEnd() {
+    if (!drag) return;
+    drag = null;
+    savePos();
+  }
+  function resetPos() {
+    pos = null;
+    savePos();
+  }
+  // Keep a remembered position on screen if the window shrinks.
+  function keepOnScreen() {
+    if (pos) pos = clamp(pos.x, pos.y);
+  }
+
   function mark(kind, shift = false) {
     if (!canMark) return;
     if (isRowIssue) onmarkrow(kind);
@@ -50,17 +111,21 @@
   }
 </script>
 
-<svelte:window onkeydown={keydown} />
+<svelte:window onkeydown={keydown} onresize={keepOnScreen} />
 
 <!-- Fixed layout: everything that changes with the cell lives in the
      scrolling body; the action bar is pinned to the bottom and always renders
      the same controls in the same places (disabled when they don't apply). -->
-<aside class="detail" aria-label="Cell details">
-  <div class="top">
+<aside class="detail" aria-label="Cell details" bind:this={panel} class:moved={pos}
+  style:left={pos ? `${pos.x}px` : null} style:top={pos ? `${pos.y}px` : null}>
+  <div class="top handle" role="presentation" title="Drag to move · double-click to reset"
+    onpointerdown={dragStart} onpointermove={dragMove} onpointerup={dragEnd} onpointercancel={dragEnd} ondblclick={resetPos}>
+    <span class="grip" aria-hidden="true">⠿</span>
     <div class="where">
       Row {row.line} · <code>{row.identifier || '(blank)'}</code> · <code>{column.name}</code>
       {#if column.label && column.role !== 'unknown'}<span class="muted">({column.label})</span>{/if}
     </div>
+    {#if pos}<button class="reset" onclick={resetPos} title="Put the panel back in its corner">⤡ Reset position</button>{/if}
     <button class="close" onclick={onclose} aria-label="Close details">×</button>
   </div>
   <div class="hints muted">
@@ -131,7 +196,14 @@
     background: var(--ia-surface); border: 1px solid var(--ia-border); border-radius: 10px;
     box-shadow: 0 12px 32px rgb(0 0 0 / 0.18); hyphens: manual;
   }
-  .top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.7rem 1.1rem 0; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; padding: 0.7rem 1.1rem 0; }
+  .detail.moved { right: auto; bottom: auto; }
+  .handle { cursor: grab; touch-action: none; user-select: none; }
+  .handle:active { cursor: grabbing; }
+  .reset { font: inherit; font-size: 0.75rem; color: var(--ia-muted); background: none; border: 0; cursor: pointer; padding: 0.1rem 0.3rem; border-radius: 4px; flex: none; }
+  .reset:hover { background: var(--ia-subtle); color: inherit; }
+  .grip { color: var(--ia-skip); font-size: 0.9rem; line-height: 1; flex: none; }
+  .where { flex: 1; }
   .where { font-size: 0.85rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hints { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.2rem 1rem; font-size: 0.72rem; padding: 0.3rem 1.1rem 0.5rem; border-bottom: 1px solid #ececef; }
   .close { font-size: 1.5rem; line-height: 1; background: none; border: 0; cursor: pointer; color: var(--ia-muted); flex: none; }

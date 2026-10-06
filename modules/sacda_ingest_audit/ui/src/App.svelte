@@ -1,4 +1,5 @@
 <script>
+  import { tick } from 'svelte';
   import SourcePicker from './components/SourcePicker.svelte';
   import ColumnMapper from './components/ColumnMapper.svelte';
   import Summary from './components/Summary.svelte';
@@ -23,6 +24,24 @@
     io.observe(uploadCard);
     return () => io.disconnect();
   });
+  // "Review another": drop the file, mapping, results and undo history, reset
+  // the upload box, and go back to it. Review marks stay (they are keyed on
+  // values, so they still apply if the same data is audited again).
+  let pickerKey = $state(0);
+  async function reviewAnother() {
+    source = null;
+    table = null;
+    result = null;
+    mapping = {};
+    history = [];
+    loadError = '';
+    runError = '';
+    ranWith = '';
+    pickerKey++;
+    await tick();
+    toUpload();
+  }
+
   function toUpload() {
     const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     uploadCard?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
@@ -203,7 +222,7 @@
 
   <section class="card upload" bind:this={uploadCard}>
     <h2>1. Spreadsheet</h2>
-    <SourcePicker sheetEndpoint={settings.sheetEndpoint} onloaded={loaded} />
+    {#key pickerKey}<SourcePicker sheetEndpoint={settings.sheetEndpoint} onloaded={loaded} />{/key}
 
     {#if source}
       <div class="loaded">
@@ -291,7 +310,7 @@
     <Summary result={view} bundles={settings.bundles} ondownload={download} />
     <ResultsTable result={view} bundles={settings.bundles} nodeBase={settings.nodeBase}
       bind:showResolved onmark={markCell} onunmark={unmarkCell} onmarkrow={markRow} onmarkmany={markMany} {groupSize}
-      onundo={undoLast} {undoLabel} ondownload={download}
+      onundo={undoLast} {undoLabel} ondownload={download} onreviewanother={reviewAnother}
       fileName={source ? `${source.name}${source.sheetNames.length > 1 ? ` · ${sheet}` : ''}` : ''} />
     {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} incomplete={view.extraIncomplete} nodeBase={settings.nodeBase} />{/if}
   {/if}

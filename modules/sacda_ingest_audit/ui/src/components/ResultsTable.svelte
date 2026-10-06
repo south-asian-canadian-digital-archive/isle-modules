@@ -4,7 +4,7 @@
   import { difference } from '../lib/resolved.js';
   import { differenceTypes } from '../lib/compare.js';
 
-  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize, onundo, undoLabel = '', ondownload, fileName = '' } = $props();
+  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize, onundo, undoLabel = '', ondownload, onreviewanother, fileName = '' } = $props();
 
   // Virtual scrolling: rows have a fixed height, and only the ones in view
   // (plus OVERSCAN either side) are in the DOM; spacer rows stand in for the
@@ -462,7 +462,10 @@
           </div>
         {/if}
       </div>
-      {#if ondownload}<button class="btn" onclick={ondownload}>Download problems (CSV)</button>{/if}
+      <div class="done-actions">
+        {#if ondownload}<button class="btn" onclick={ondownload}>Download problems (CSV)</button>{/if}
+        {#if onreviewanother}<button class="btn secondary" onclick={onreviewanother}>Review another</button>{/if}
+      </div>
     </div>
   {/if}
 
@@ -715,6 +718,7 @@
   .shown { font-size: 0.85rem; margin-left: auto; }
   .empty.quiet { background: var(--ia-subtle); color: var(--ia-muted); font-weight: 400; }
   .done { border: 1px solid #b9e2c4; background: var(--ia-ok-bg); border-radius: 10px; padding: 0.9rem 1rem; margin-bottom: 0.9rem; display: flex; flex-direction: column; gap: 0.75rem; align-items: flex-start; }
+  .done-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
   .done-head { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: baseline; }
   .done-head strong { color: var(--ia-ok); font-size: 1.05rem; }
   .done-head .file { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; padding: 0.1em 0.5em; border-radius: 4px; background: var(--ia-surface); border: 1px solid #b9e2c4; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

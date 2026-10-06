@@ -58,7 +58,9 @@ row matches the repository" (which now appears only when the audit found
 nothing at all). It shows issues found, how many were marked as problems
 (kept in the export) and resolved (left out), each as a share, plus rows now
 clear and nodes not in the file. Clicking a figure filters to those issues,
-and the problems CSV is one click away.
+and the problems CSV is one click away. **Review another** clears the
+file, mapping, results and undo history and returns to the upload box (review
+marks are kept: they are keyed on values).
 
 **Bulk marking.** Shift+click selects the rectangle from the last clicked
 cell; Cmd/Ctrl+click adds or removes single cells. A bar then offers
@@ -70,6 +72,10 @@ the bulk bar and the column menu have an **Only** filter (all issues,
 ✕ mismatches, ! term/date differs, missing in repository, value differs, only
 in repository), each with its count, so one kind can be resolved or flagged
 on its own. Bulk marks are per row, not "all identical".
+
+**The detail panel is draggable** by its top strip; its position is
+remembered per browser and kept clear of Drupal's admin toolbar. Double-click
+the strip (or ⤡ Reset position) to send it back to its corner.
 
 **Reviewing quickly.** After a resolve the panel jumps to the next issue,
 down the same column first, then on to the next column, skipping whatever
