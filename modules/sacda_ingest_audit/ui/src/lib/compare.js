@@ -352,13 +352,72 @@ function matcher(kind, column, field) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pairing: which unmatched file value corresponds to which repository value
+
+/** 0..1: how alike two values are (containment, else bigram overlap). */
+export function similarity(a, b) {
+  const x = compact(a);
+  const y = compact(b);
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  if (x.includes(y) || y.includes(x)) return 0.6 + 0.4 * (Math.min(x.length, y.length) / Math.max(x.length, y.length));
+  const grams = (s) => { const g = new Map(); for (let i = 0; i < s.length - 1; i++) { const k = s.slice(i, i + 2); g.set(k, (g.get(k) ?? 0) + 1); } return g; };
+  const gx = grams(x);
+  const gy = grams(y);
+  let shared = 0;
+  for (const [k, n] of gx) shared += Math.min(n, gy.get(k) ?? 0);
+  return (2 * shared) / Math.max(1, x.length - 1 + y.length - 1);
+}
+
+/**
+ * Pair unmatched file values with unmatched repository values that look like
+ * the same value changed ("Singh, Mayo" → "Singh, Mayo, 1891-1955"). A lone
+ * value on each side always pairs; otherwise greedily by similarity ≥ 0.4.
+ * Returns [[fileValue, repositoryValue], …].
+ */
+export function pairChanges(missing, extra) {
+  if (!missing.length || !extra.length) return [];
+  if (missing.length === 1 && extra.length === 1) return [[missing[0], extra[0]]];
+  const candidates = [];
+  missing.forEach((m, i) => extra.forEach((e, j) => candidates.push([similarity(m, e), i, j])));
+  candidates.sort((p, q) => q[0] - p[0]);
+  const usedM = new Set();
+  const usedE = new Set();
+  const pairs = [];
+  for (const [score, i, j] of candidates) {
+    if (score < 0.4) break;
+    if (usedM.has(i) || usedE.has(j)) continue;
+    usedM.add(i);
+    usedE.add(j);
+    pairs.push([missing[i], extra[j]]);
+  }
+  return pairs;
+}
+
+/**
+ * The kinds of difference in a cell: missing (in the file, not in the
+ * repository), changed (a file value and its altered repository value),
+ * extra (only in the repository).
+ */
+export function differenceTypes(cell) {
+  const pairs = cell.pairs ?? [];
+  const pairedM = new Set(pairs.map((p) => p[0]));
+  const pairedE = new Set(pairs.map((p) => p[1]));
+  return {
+    missing: (cell.missing ?? []).some((v) => !pairedM.has(v)),
+    changed: pairs.length > 0,
+    extra: (cell.extra ?? []).some((v) => !pairedE.has(v)),
+  };
+}
+
 /**
  * Compare one cell. Returns
  * { status, sheet: [token], server: [display], missing: [token], extra: [display], note }.
  */
 export function compareCell(raw, items, column, { field, multi, delimiter = '|', strict = false } = {}) {
   const tokens = splitCell(raw, multi, delimiter);
-  const result = { status: OK, sheet: tokens, server: items.map((i) => i.display), missing: [], extra: [], note: '' };
+  const result = { status: OK, sheet: tokens, server: items.map((i) => i.display), missing: [], extra: [], pairs: [], note: '' };
 
   if (!tokens.length && !items.length) return result;
   if (!tokens.length) {
@@ -399,6 +458,7 @@ export function compareCell(raw, items, column, { field, multi, delimiter = '|',
   }
   result.missing = unmatched;
   result.extra = items.filter((_, j) => !used.has(j)).map((i) => i.display);
+  result.pairs = pairChanges(result.missing, result.extra);
 
   if (!result.missing.length && !result.extra.length) {
     if (normalised) {

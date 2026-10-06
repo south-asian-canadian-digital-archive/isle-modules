@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { compareCell, planColumns, suggestMapping, OK, INFO, WARN, ERROR } from './compare.js';
+import { compareCell, planColumns, suggestMapping, pairChanges, differenceTypes, OK, INFO, WARN, ERROR } from './compare.js';
 
 const term = (name, extra = {}) => ({ display: name, term: { tid: 1, name, vocab: 'subject', uris: [], ...extra } });
 const col = (kind, role = 'field') => ({ name: 'x', role, kind });
@@ -134,5 +134,21 @@ describe('suggestMapping', () => {
   test('only one column gets the match key; Workbench id is the fallback', () => {
     expect(suggestMapping(['identifier', 'field_identifier'], bundles)).toEqual({ identifier: 'field_identifier', field_identifier: '' });
     expect(suggestMapping(['id', 'title'], bundles).id).toBe('field_identifier');
+  });
+});
+
+describe('pairing changed values', () => {
+  test('a lone value on each side is a change', () => {
+    expect(pairChanges(['Bonto'], ['Banto Singh'])).toEqual([['Bonto', 'Banto Singh']]);
+  });
+  test('multi-valued: pairs by similarity, leaves the rest missing / extra', () => {
+    const pairs = pairChanges(['Singh, Mayo', 'Airplanes'], ['Trucks', 'Singh, Mayo, 1891-1955']);
+    expect(pairs).toEqual([['Singh, Mayo', 'Singh, Mayo, 1891-1955']]);
+  });
+  test('cell difference types', () => {
+    const items = [{ display: 'Friendship', term: { tid: 1, name: 'Friendship', uris: [] } }, { display: 'Group portraits, 1900-1999', term: { tid: 2, name: 'Group portraits, 1900-1999', uris: [] } }];
+    const c = compareCell('Friendship|Group portraits|Airplanes', items, { name: 'x', role: 'field', kind: 'term' }, { multi: true });
+    expect(c.pairs).toEqual([['Group portraits', 'Group portraits, 1900-1999']]);
+    expect(differenceTypes(c)).toEqual({ missing: true, changed: true, extra: false });
   });
 });

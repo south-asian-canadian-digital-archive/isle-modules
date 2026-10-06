@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import CellDetail from './CellDetail.svelte';
   import { difference } from '../lib/resolved.js';
+  import { differenceTypes } from '../lib/compare.js';
 
   let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize, onundo, undoLabel = '' } = $props();
 
@@ -128,6 +129,25 @@
   let anchor = $state(null);    // { line, column }
   let menuCol = $state('');     // column whose ⋯ menu is open
 
+  // "Which" filter for bulk and column actions: by severity or by the kind
+  // of difference (missing in repository / value differs / only in repository).
+  const TYPES = [
+    ['all', 'All issues'],
+    ['error', '✕ Mismatches'],
+    ['warn', '! Term / date differs'],
+    ['missing', 'Missing in repository'],
+    ['changed', 'Value differs'],
+    ['extra', 'Only in repository'],
+  ];
+  let bulkType = $state('all');
+  let menuType = $state('all');
+  function matchesType(cell, t) {
+    if (t === 'all') return true;
+    const base = cell.flagged || cell.resolved || cell.status;
+    if (t === 'error' || t === 'warn') return base === t;
+    return differenceTypes(cell)[t];
+  }
+
   const isActionable = (cell) => !!cell && (cell.resolved || cell.flagged || ['error', 'warn'].includes(cell.status));
   const bulkItems = $derived([...bulk].map((k) => {
     const i = k.indexOf('|');
@@ -135,8 +155,10 @@
     const name = k.slice(i + 1);
     return row && isActionable(row.cells[name]) ? { row, name, cell: row.cells[name] } : null;
   }).filter(Boolean));
-  const bulkOpen = $derived(bulkItems.filter((x) => !x.cell.resolved && !x.cell.flagged));
-  const bulkMarked = $derived(bulkItems.filter((x) => x.cell.resolved || x.cell.flagged));
+  const bulkTyped = $derived(bulkItems.filter((x) => matchesType(x.cell, bulkType)));
+  const bulkOpen = $derived(bulkTyped.filter((x) => !x.cell.resolved && !x.cell.flagged));
+  const bulkMarked = $derived(bulkTyped.filter((x) => x.cell.resolved || x.cell.flagged));
+  const typeCounts = (items) => Object.fromEntries(TYPES.map(([t]) => [t, items.filter((x) => matchesType(x.cell, t)).length]));
 
   function cellClick(e, row, name) {
     const here = { line: row.line, column: name };
@@ -186,9 +208,10 @@
     return result.rows.filter((r) => (!typeFilter || r.bundle === typeFilter)
       && (!q || `${r.identifier} ${r.title}`.toLowerCase().includes(q)));
   });
-  function columnItems(name, which) {
+  function columnItems(name, which, type = menuType) {
     return columnScope.map((row) => ({ row, name, cell: row.cells[name] }))
-      .filter(({ cell }) => isActionable(cell) && (which === 'marked' ? (cell.resolved || cell.flagged) : !(cell.resolved || cell.flagged)));
+      .filter(({ cell }) => isActionable(cell) && matchesType(cell, type)
+        && (which === 'marked' ? (cell.resolved || cell.flagged) : which === 'any' || !(cell.resolved || cell.flagged)));
   }
   function columnAction(name, action) {
     menuCol = '';
@@ -392,7 +415,13 @@
                 {#if menuCol === col.name}
                   {@const open = columnItems(col.name, 'open').length}
                   {@const done = columnItems(col.name, 'marked').length}
+                  {@const counts = typeCounts(columnItems(col.name, 'open', 'all'))}
                   <div class="h-menu" role="menu">
+                    <label class="which">Only
+                      <select bind:value={menuType} aria-label="Which issues in column {col.name}">
+                        {#each TYPES as [t, label]}<option value={t}>{label} ({counts[t]})</option>{/each}
+                      </select>
+                    </label>
                     <button role="menuitem" disabled={!open} onclick={() => columnAction(col.name, 'resolved')}>✓ Resolve all {open} issue{open === 1 ? '' : 's'} in this column</button>
                     <button role="menuitem" disabled={!open} onclick={() => columnAction(col.name, 'problem')}>⚑ Mark all {open} as problems</button>
                     <button role="menuitem" disabled={!open} onclick={() => columnAction(col.name, 'select')}>Select these {open} for review</button>
@@ -473,6 +502,13 @@
 {#if bulk.size}
   <div class="bulkbar" role="region" aria-label="Bulk actions">
     <strong>{bulkItems.length} selected</strong>
+    <label class="which">Only
+      <select bind:value={bulkType} aria-label="Which selected issues">
+        {#each Object.entries(typeCounts(bulkItems.filter((x) => !x.cell.resolved && !x.cell.flagged))) as [t, n]}
+          <option value={t}>{TYPES.find((x) => x[0] === t)[1]} ({n})</option>
+        {/each}
+      </select>
+    </label>
     <span class="muted">{bulkOpen.length} open{bulkMarked.length ? ` · ${bulkMarked.length} already marked` : ''}</span>
     <button class="btn" disabled={!bulkOpen.length} onclick={() => bulkMark('resolved')}>✓ Resolve {bulkOpen.length}</button>
     <button class="btn problem" disabled={!bulkOpen.length} onclick={() => bulkMark('problem')}>⚑ Problem {bulkOpen.length}</button>
@@ -522,6 +558,9 @@
   .h-menu button { font: inherit; text-align: left; padding: 0.4rem 0.6rem; border: 0; border-radius: 5px; background: none; cursor: pointer; white-space: nowrap; }
   .h-menu button:hover:not(:disabled) { background: var(--ia-subtle); }
   .h-menu button:disabled { color: var(--ia-skip); cursor: default; }
+  .which { display: flex; gap: 0.4rem; align-items: center; font-size: 0.8rem; color: var(--ia-muted); padding: 0.2rem 0.6rem 0.4rem; }
+  .which select { font: inherit; color: var(--ia-text, inherit); padding: 0.2em 0.35em; border: 1px solid var(--ia-border); border-radius: 5px; }
+  .bulkbar .which { padding: 0; }
   .h-menu p { margin: 0.25rem 0.6rem 0.15rem; font-size: 0.75rem; hyphens: manual; white-space: normal; max-width: 17rem; }
   .bulkbar {
     position: fixed; z-index: 500; left: 50%; bottom: 1rem; transform: translateX(-50%);

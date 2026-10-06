@@ -15,8 +15,12 @@
   const canMark = $derived(isRowIssue ? !rowMarked : cellIssue && !marked);
   const canUnmark = $derived(isRowIssue ? rowMarked : marked);
   const canScope = $derived(!isRowIssue && groupSize > 1 && canMark);
-  const missing = $derived(new Set(cell.missing));
-  const extra = $derived(new Set(cell.extra));
+  // Red: in the file, missing from the repository. Yellow: a value that is
+  // there but changed (paired file ↔ repository). Blue: only in the repository.
+  const changedFile = $derived(new Set((cell.pairs ?? []).map((p) => p[0])));
+  const changedRepo = $derived(new Set((cell.pairs ?? []).map((p) => p[1])));
+  const missing = $derived(new Set(cell.missing.filter((v) => !changedFile.has(v))));
+  const extra = $derived(new Set(cell.extra.filter((v) => !changedRepo.has(v))));
 
   function mark(kind, shift = false) {
     if (isRowIssue) onmarkrow(kind);
@@ -57,7 +61,7 @@
     <button class="close" onclick={onclose} aria-label="Close details">×</button>
   </div>
   <div class="hints muted">
-    <span><span class="missing">Red</span> in the file only · <span class="extra">Blue</span> in the repository only</span>
+    <span><span class="missing">Red</span> missing in repository · <span class="changed">Yellow</span> value differs · <span class="extra">Blue</span> only in repository</span>
     <span><kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>R</kbd> resolve · <kbd>F</kbd> problem · <kbd>⇧</kbd> this row only · <kbd>U</kbd> unmark · <kbd>⌘Z</kbd> undo · <kbd>Esc</kbd></span>
   </div>
 
@@ -80,7 +84,7 @@
       <div>
         <h3>In the file</h3>
         {#if cell.sheet.length}
-          <ul>{#each cell.sheet as v}<li class:missing={missing.has(v)}>{v}</li>{/each}</ul>
+          <ul>{#each cell.sheet as v}<li class:missing={missing.has(v)} class:changed={changedFile.has(v)}>{v}</li>{/each}</ul>
         {:else}<p class="muted">(blank)</p>{/if}
       </div>
       <div>
@@ -88,7 +92,7 @@
           {#each row.nodes as n}<a href="{nodeBase}{n.nid}" target="_blank" rel="noopener">node/{n.nid}</a>{/each}
         </h3>
         {#if cell.server.length}
-          <ul>{#each cell.server as v}<li class:extra={extra.has(v)}>{v}</li>{/each}</ul>
+          <ul>{#each cell.server as v}<li class:extra={extra.has(v)} class:changed={changedRepo.has(v)}>{v}</li>{/each}</ul>
         {:else}<p class="muted">{row.nodes.length ? '(empty)' : 'No node with this identifier.'}</p>{/if}
       </div>
     </div>
@@ -139,7 +143,8 @@
   li { background: var(--ia-subtle); border-radius: 4px; padding: 0.3rem 0.5rem; white-space: pre-wrap; word-break: break-word; }
   li.missing, span.missing { background: var(--ia-error-bg); color: var(--ia-error); }
   li.extra, span.extra { background: var(--ia-info-bg); color: var(--ia-info); }
-  span.missing, span.extra { padding: 0 0.3em; border-radius: 3px; }
+  li.changed, span.changed { background: var(--ia-warn-bg); color: var(--ia-warn); }
+  span.missing, span.extra, span.changed { padding: 0 0.3em; border-radius: 3px; }
   .bar { flex: none; display: flex; flex-direction: column; gap: 0.5rem; padding: 0.65rem 1.1rem 0.8rem; border-top: 1px solid var(--ia-border); background: #fafafb; border-radius: 0 0 10px 10px; }
   .line { display: flex; align-items: center; gap: 0.5rem; }
   .bar .btn { padding: 0.3em 0.8em; font-size: 0.85rem; white-space: nowrap; }

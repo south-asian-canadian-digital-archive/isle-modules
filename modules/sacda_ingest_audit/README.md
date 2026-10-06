@@ -28,6 +28,13 @@ its cell count. Select one or more to see only the rows containing such
 cells; other cells are dimmed. They combine with the column focus (click a
 column's issue count), the content-type filter and search.
 
+**Kinds of difference.** In the detail panel, unmatched values are paired
+up when they look like the same value changed (a lone value on each side
+always pairs; otherwise by similarity, so "Singh, Mayo" pairs with "Singh,
+Mayo, 1891-1955"):
+**red** = in the file, missing in the repository; **yellow** = the value
+differs; **blue** = only in the repository.
+
 **Marking issues resolved.** Click a cell. If the same *difference* occurs in
 other rows of that column, the panel offers **Mark all N identical resolved**,
 plus **Only this row**. For a multi-valued cell, the difference is only the
@@ -51,8 +58,11 @@ cell; Cmd/Ctrl+click adds or removes single cells. A bar then offers
 ✓ Resolve / ⚑ Problem / Undo / Clear (keys R / F / U / Esc) for the issues in
 the selection. Each column header's **⋯** menu resolves, marks as problems,
 selects or un-marks every issue in that column, across all rows that pass the
-content-type filter and search, including rows the status filters hide. Bulk
-marks are per row, not "all identical".
+content-type filter and search, including rows the status filters hide. Both
+the bulk bar and the column menu have an **Only** filter (all issues,
+✕ mismatches, ! term/date differs, missing in repository, value differs, only
+in repository), each with its count, so one kind can be resolved or flagged
+on its own. Bulk marks are per row, not "all identical".
 
 **Reviewing quickly.** After a resolve the panel jumps to the next issue,
 down the same column first, then on to the next column, skipping whatever
