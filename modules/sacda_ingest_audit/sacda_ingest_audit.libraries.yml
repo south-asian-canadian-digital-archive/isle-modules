@@ -1,0 +1,11 @@
+# Built from ui/ with `bun run build` (see README). dist/ is committed because
+# the Drupal image build does not run a JS toolchain.
+app:
+  version: VERSION
+  js:
+    dist/ingest-audit.js: { attributes: { defer: true }, preprocess: false, minified: true }
+  css:
+    component:
+      dist/ingest-audit.css: {}
+  dependencies:
+    - core/drupalSettings

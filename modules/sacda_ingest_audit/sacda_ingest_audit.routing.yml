@@ -1,0 +1,20 @@
+sacda_ingest_audit.page:
+  path: '/admin/content/ingest-audit'
+  defaults:
+    _controller: '\Drupal\sacda_ingest_audit\Controller\IngestAuditController::page'
+    _title: 'Ingest audit'
+  requirements:
+    _permission: 'use ingest audit'
+
+# Server-side fetch of a Google Sheets CSV export: Google does not send CORS
+# headers, so the browser cannot read it directly. Locked to docs.google.com.
+sacda_ingest_audit.sheet:
+  path: '/admin/content/ingest-audit/sheet'
+  defaults:
+    _controller: '\Drupal\sacda_ingest_audit\Controller\IngestAuditController::sheet'
+  methods: [GET]
+  requirements:
+    _permission: 'use ingest audit'
+    _csrf_token: 'TRUE'
+  options:
+    no_cache: TRUE

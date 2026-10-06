@@ -1,0 +1,5 @@
+sacda_ingest_audit.page:
+  title: 'Ingest audit'
+  description: 'Compare an ingest spreadsheet with what is in the repository.'
+  route_name: sacda_ingest_audit.page
+  parent: system.admin_content

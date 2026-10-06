@@ -1,0 +1,12 @@
+name: 'SACDA Ingest Audit'
+type: module
+description: 'Reconciles an ingest spreadsheet (CSV, Excel or a Google Sheets link) against what is actually in the repository, matched on field_identifier.'
+package: SACDA
+core_version_requirement: ^10 || ^11
+dependencies:
+  # All repository data is read in the browser through core JSON:API; this
+  # module only serves the page and a Google Sheets fetch.
+  - drupal:jsonapi
+  - drupal:node
+  - drupal:media
+  - drupal:taxonomy

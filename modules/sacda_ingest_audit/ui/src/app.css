@@ -1,0 +1,50 @@
+.ia {
+  --ia-border: #d4d4d8;
+  --ia-muted: #6b7280;
+  --ia-surface: #ffffff;
+  --ia-subtle: #f6f6f7;
+  --ia-accent: #003ecc;
+  --ia-ok: #1e7b34;
+  --ia-ok-bg: #e9f6ec;
+  --ia-info: #1d4f91;
+  --ia-info-bg: #e8f0fb;
+  --ia-warn: #7a5200;
+  --ia-warn-bg: #fff2cc;
+  --ia-warn-line: #e8c15a;
+  --ia-error: #a4161a;
+  --ia-error-bg: #fde6e7;
+  --ia-error-line: #ef9a9f;
+  --ia-skip: #71717a;
+  --ia-skip-bg: #f4f4f5;
+  font-size: 0.9375rem;
+  color: #1f2937;
+  /* Width never depends on content, so the wide results table scrolls inside
+     its own box instead of stretching the admin page. */
+  width: 100%;
+  contain: inline-size;
+}
+.ia *, .ia *::before, .ia *::after { box-sizing: border-box; }
+.ia .pill {
+  display: inline-flex; align-items: center; gap: 0.3em;
+  padding: 0.1em 0.55em; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 600; line-height: 1.5; white-space: nowrap;
+}
+.ia .pill.ok { background: var(--ia-ok-bg); color: var(--ia-ok); }
+.ia .pill.info { background: var(--ia-info-bg); color: var(--ia-info); }
+.ia .pill.warn { background: var(--ia-warn-bg); color: var(--ia-warn); }
+.ia .pill.error { background: var(--ia-error-bg); color: var(--ia-error); }
+.ia .pill.skip { background: var(--ia-skip-bg); color: var(--ia-skip); }
+.ia .btn {
+  font: inherit; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--ia-accent); background: var(--ia-accent); color: #fff;
+  border-radius: 6px; padding: 0.5em 1.1em;
+}
+.ia .btn:disabled { opacity: 0.5; cursor: default; }
+.ia .btn.secondary { background: var(--ia-surface); color: var(--ia-accent); }
+.ia .card {
+  background: var(--ia-surface); border: 1px solid var(--ia-border);
+  border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem;
+}
+.ia h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+.ia .muted { color: var(--ia-muted); }
+.ia code { font-size: 0.85em; background: var(--ia-subtle); padding: 0.05em 0.3em; border-radius: 3px; }

@@ -1,0 +1,4 @@
+use ingest audit:
+  title: 'Use the ingest audit tool'
+  description: 'Upload a metadata spreadsheet and compare it with repository content. Results show whatever the user can already read through JSON:API.'
+  restrict access: true
