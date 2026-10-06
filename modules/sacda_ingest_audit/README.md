@@ -28,12 +28,24 @@ its cell count. Select one or more to see only the rows containing such
 cells; other cells are dimmed. They combine with the column focus (click a
 column's issue count), the content-type filter and search.
 
-**Marking issues resolved.** Click a cell. If the same discrepancy (same
-column, same file value, same repository value) occurs in other rows, the
-panel offers **Mark all N identical resolved**, plus **Only this row**.
-Missing or duplicated identifiers use **Mark row resolved**. Resolved issues
-drop out of the filters, counts and CSV export; **Show resolved** brings them
-back struck through, and unresolving a group unresolves all of it.
+**Marking issues resolved.** Click a cell. If the same *difference* occurs in
+other rows of that column, the panel offers **Mark all N identical resolved**,
+plus **Only this row**. For a multi-valued cell, the difference is only the
+values that didn't match: "Singh, Mayo" in the file vs "Singh, Mayo,
+1891-1955" in the repository groups across every row, whatever other names
+each row lists. Missing or duplicated identifiers use **Mark row resolved**.
+Resolved issues drop out of the filters, counts and CSV export; **Show
+resolved** brings them back struck through, and unresolving a group
+unresolves all of it.
+
+**Reviewing quickly.** After a resolve the panel jumps to the next issue,
+down the same column first, then on to the next column, skipping whatever
+that resolve just covered (untick "Go to next after resolving" to stay
+put). **Previous / Next** walk the same order, over the rows and columns
+currently shown (the chip filters choose which kinds count as issues).
+Keys: <kbd>N</kbd>/<kbd>→</kbd> next, <kbd>P</kbd>/<kbd>←</kbd> previous,
+<kbd>R</kbd> resolve (all identical), <kbd>Shift</kbd>+<kbd>R</kbd> this row
+only, <kbd>U</kbd> undo, <kbd>Esc</kbd> close.
 
 Marks are keyed on the column's header *and the field it is mapped to*, plus
 both values. So they survive a remap and re-run for every column whose mapping

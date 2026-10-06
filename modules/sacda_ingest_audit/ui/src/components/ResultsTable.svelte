@@ -1,5 +1,7 @@
 <script>
+  import { tick } from 'svelte';
   import CellDetail from './CellDetail.svelte';
+  import { difference } from '../lib/resolved.js';
 
   let { result, bundles, nodeBase, showResolved = $bindable(false), onresolve, onunresolve, ontogglerow, groupSize } = $props();
 
@@ -33,6 +35,88 @@
     ['resolved', '✓ marked resolved'],
   ];
   const kindOf = (cell) => (cell.resolved ? 'resolved' : cell.status);
+
+  // Review flow: Previous/Next walk the issues column by column (down a
+  // column first, then on to the next), over the rows and columns currently
+  // shown. "Issues" are the selected chip kinds, else mismatches + warnings.
+  let autoAdvance = $state(true);
+  const navKinds = $derived(kinds.length ? kinds.filter((k) => k !== 'resolved' || showResolved) : ['error', 'warn']);
+
+  function qualifies(row, name, skip) {
+    const c = row.cells[name];
+    return !!c && !skip?.(row, name, c) && navKinds.includes(kindOf(c));
+  }
+
+  function findFrom(line, column, dir, skip) {
+    if (!rows.length || !columns.length) return null;
+    let ci = columns.findIndex((c) => c.name === column);
+    let ri;
+    if (ci < 0) { ci = dir > 0 ? 0 : columns.length - 1; ri = dir > 0 ? -1 : rows.length; }
+    else {
+      ri = rows.findIndex((r) => r.line === line);
+      if (ri < 0) {
+        // Row no longer shown (filtered out): continue from where it was.
+        const after = rows.findIndex((r) => r.line > line);
+        ri = (after < 0 ? rows.length : after) - (dir > 0 ? 1 : 0);
+      }
+    }
+    for (;;) {
+      ri += dir;
+      if (ri < 0 || ri >= rows.length) {
+        ci += dir;
+        if (ci < 0 || ci >= columns.length) return null;
+        ri = dir > 0 ? 0 : rows.length - 1;
+      }
+      if (qualifies(rows[ri], columns[ci].name, skip)) return { line: rows[ri].line, column: columns[ci].name };
+    }
+  }
+
+  // "Issue 3 of 52" for the selected cell.
+  const position = $derived.by(() => {
+    if (!selected) return null;
+    let total = 0;
+    let index = 0;
+    for (const c of columns) {
+      for (const r of rows) {
+        if (!qualifies(r, c.name)) continue;
+        total++;
+        if (r.line === selected.line && c.name === selected.column) index = total;
+      }
+    }
+    return { index, total };
+  });
+
+  async function go(target) {
+    if (!target) return;
+    selected = target;
+    const ri = rows.findIndex((r) => r.line === target.line);
+    if (ri < 0 || !scroller) return;
+    const top = ri * rowH;
+    if (top < scroller.scrollTop || top + rowH > scroller.scrollTop + scroller.clientHeight - headH) {
+      scroller.scrollTop = Math.max(0, top - rowH * 3);
+      scrollTop = scroller.scrollTop;
+    }
+    await tick();
+    scroller.querySelector(`[data-cell="${CSS.escape(`${target.line}|${target.column}`)}"]`)
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  const next = () => go(selected && findFrom(selected.line, selected.column, 1));
+  const prev = () => go(selected && findFrom(selected.line, selected.column, -1));
+
+  // Resolve, then jump to the next issue that this resolve did not cover.
+  function resolveAndAdvance(scope) {
+    const row = selRow;
+    const name = selCol.name;
+    const cell = row.cells[name];
+    const sig = JSON.stringify(difference(cell));
+    const covered = scope === 'all'
+      ? (r, n, c) => n === name && JSON.stringify(difference(c)) === sig
+      : (r, n) => r.line === row.line && n === name;
+    const target = autoAdvance ? findFrom(row.line, name, 1, covered) : null;
+    onresolve(row, name, cell, scope);
+    if (target) go(target);
+  }
   // Selection by row line + column name, so it survives re-runs and resolve toggles.
   let selected = $state(null); // { line, column }
 
@@ -216,7 +300,7 @@
               <td class="c-type"><span class="type">{row.bundle ? (bundles[row.bundle]?.label ?? row.bundle) : '—'}</span></td>
               {#each columns as col (col.name)}
                 {@const cell = row.cells[col.name]}
-                <td class="c {cell.status}" class:focused={focusColumn === col.name} class:resolved={cell.resolved && showResolved}
+                <td data-cell="{row.line}|{col.name}" class="c {cell.status}" class:focused={focusColumn === col.name} class:resolved={cell.resolved && showResolved}
                   class:dim={kinds.length && !kinds.includes(kindOf(cell))}>
                   <button class="cell-btn" class:selected={selected?.line === row.line && selected?.column === col.name}
                     title="{cell.resolved ? 'Marked resolved' : STATUS_LABEL[cell.status]}{cell.note ? ` — ${cell.note}` : ''}"
@@ -241,7 +325,7 @@
 {#if selRow && selCol}
   <CellDetail row={selRow} column={selCol} {nodeBase} onclose={() => (selected = null)}
     groupSize={groupSize(selCol.name, selRow.cells[selCol.name])}
-    onresolve={(scope) => onresolve(selRow, selCol.name, selRow.cells[selCol.name], scope)}
+    onresolve={resolveAndAdvance} {position} onnext={next} onprev={prev} bind:autoAdvance
     onunresolve={() => onunresolve(selRow, selCol.name, selRow.cells[selCol.name])}
     ontogglerow={() => ontogglerow(selRow)} />
 {/if}
@@ -264,6 +348,8 @@
   .sw.off { opacity: 0.45; }
   .sw:focus-visible { outline: 2px solid var(--ia-accent); outline-offset: 1px; }
   td.dim { opacity: 0.35; }
+  /* Keep a cell revealed by Previous/Next clear of the sticky columns and header. */
+  td.c { scroll-margin-left: 21rem; scroll-margin-top: 6rem; }
   .sw.error { background: var(--ia-error-bg); color: var(--ia-error); border-color: var(--ia-error-line); }
   .sw.warn { background: var(--ia-warn-bg); color: var(--ia-warn); border-color: var(--ia-warn-line); }
   .sw.info { background: var(--ia-info-bg); color: var(--ia-info); }

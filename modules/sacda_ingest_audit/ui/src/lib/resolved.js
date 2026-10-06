@@ -2,8 +2,11 @@
 //
 // Two kinds of mark, both keyed on the column AND both values, so a mark
 // only hides that exact discrepancy and it comes back if either side changes:
-//   value mark — every row with the same column, file value and repository
-//                value (the default: one decision covers all its duplicates)
+//   value mark — every row with the same column and the same *difference*
+//                (the default: one decision covers all its duplicates). For a
+//                multi-valued cell the difference is just the values that did
+//                not match, so "Singh, Mayo" vs "Singh, Mayo, 1891-1955"
+//                groups across rows whatever other names they list.
 //   cell mark  — one row only ("only this one")
 // The column part is the header AND the field it is mapped to, so after a
 // remap + re-run, marks on unchanged columns still apply while a column that
@@ -27,8 +30,19 @@ export function cellKey(row, column, cell) {
   return JSON.stringify([row.identifier, column, cell.sheet, cell.server]);
 }
 
+/**
+ * What actually differs in a cell: the unmatched values on each side, order
+ * ignored. Cells with no listed difference (e.g. "not a field on this
+ * content type") fall back to their full values.
+ */
+export function difference(cell) {
+  const missing = [...(cell.missing ?? [])].sort();
+  const extra = [...(cell.extra ?? [])].sort();
+  return missing.length || extra.length ? { missing, extra } : { sheet: cell.sheet, server: cell.server };
+}
+
 export function valueKey(column, cell) {
-  return JSON.stringify(['*', column, cell.sheet, cell.server]);
+  return JSON.stringify(['*d', column, difference(cell)]);
 }
 
 /** How many issue cells share each value key (resolved or not). */

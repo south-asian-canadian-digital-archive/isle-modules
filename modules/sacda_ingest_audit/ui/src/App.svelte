@@ -52,16 +52,14 @@
   const specOf = (name) => colSpec(result.columns.find((c) => c.name === name) ?? { name });
   function resolveCell(row, name, cell, scope) {
     const column = specOf(name);
-    const values = { sheet: cell.sheet, server: cell.server };
-    update((m) => m.add(scope === 'all' ? valueKey(column, values) : cellKey(row, column, values)));
+    update((m) => m.add(scope === 'all' ? valueKey(column, cell) : cellKey(row, column, cell)));
   }
   function unresolveCell(row, name, cell) {
     const column = specOf(name);
-    const values = { sheet: cell.sheet, server: cell.server };
-    update((m) => { m.delete(cellKey(row, column, values)); m.delete(valueKey(column, values)); });
+    update((m) => { m.delete(cellKey(row, column, cell)); m.delete(valueKey(column, cell)); });
   }
   const toggleRow = (row) => update((m) => { const k = rowKey(row); if (m.has(k)) m.delete(k); else m.add(k); });
-  const groupSize = (name, cell) => sizes.get(valueKey(specOf(name), { sheet: cell.sheet, server: cell.server })) ?? 1;
+  const groupSize = (name, cell) => sizes.get(valueKey(specOf(name), cell)) ?? 1;
 
   // The result belongs to the mapping/options it was run with; say so when
   // they have changed since, instead of silently showing stale results.

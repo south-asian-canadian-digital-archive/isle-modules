@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { applyResolved, cellKey, rowKey, valueKey, groupSizes } from './resolved.js';
 
-const cell = (status, sheet = ['a'], server = ['b']) => ({ status, sheet, server, missing: [], extra: [], note: '' });
+const cell = (status, sheet = ['a'], server = ['b'], missing = sheet, extra = server) => ({ status, sheet, server, missing, extra, note: '' });
 const result = () => ({
   columns: [{ name: 'id', role: 'identifier' }, { name: 'title', role: 'field' }, { name: 'date', role: 'field' }],
   // (no targets here, so colSpec(column) is just the header name)
@@ -60,6 +60,18 @@ describe('applyResolved', () => {
     expect(applyResolved(r, marks).rows[0].cells.title.resolved).toBe('error');
     r.columns[1].target = 'field_alt_title'; // remapped, same header
     expect(applyResolved(r, marks).rows[0].cells.title.resolved).toBeUndefined();
+  });
+
+  test('multi-valued cells group on the difference, not the whole cell', () => {
+    const r = result();
+    const mayo = (others) => cell('warn', [...others, 'Singh, Mayo'], [...others, 'Singh, Mayo, 1891-1955'], ['Singh, Mayo'], ['Singh, Mayo, 1891-1955']);
+    r.rows[0].cells.date = mayo(['Singh, Basant']);
+    r.rows[1].cells.date = mayo(['Singh, Karm', 'Singh, Ranjit']);
+    r.rows[1].nodes = [{}]; r.rows[1].noteStatus = 'ok';
+    expect(groupSizes(r).get(valueKey('date', r.rows[0].cells.date))).toBe(2);
+    const v = applyResolved(r, new Set([valueKey('date', r.rows[0].cells.date)]));
+    expect(v.rows[0].cells.date.resolvedBy).toBe('value');
+    expect(v.rows[1].cells.date.resolvedBy).toBe('value');
   });
 
   test('row-level issues (not found) are resolved per row', () => {
