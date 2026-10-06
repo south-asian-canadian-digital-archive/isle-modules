@@ -22,6 +22,8 @@
      its own box instead of stretching the admin page. */
   width: 100%;
   contain: inline-size;
+  /* Claro hyphenates body text; labels here are short and read better whole. */
+  hyphens: manual;
 }
 .ia *, .ia *::before, .ia *::after { box-sizing: border-box; }
 .ia .pill {

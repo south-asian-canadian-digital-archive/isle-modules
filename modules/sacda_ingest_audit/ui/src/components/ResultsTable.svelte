@@ -128,6 +128,17 @@
   let bulk = $state(new Set()); // "line|column"
   let anchor = $state(null);    // { line, column }
   let menuCol = $state('');     // column whose ⋯ menu is open
+  // The menu is rendered outside the table at fixed viewport coordinates:
+  // inside a sticky header cell it was painted over by neighbouring headers
+  // (each sticky cell is its own stacking context) and clipped by the scroller.
+  let menuPos = $state({ top: 0, left: 0 });
+  function openMenu(e, name) {
+    if (menuCol === name) { menuCol = ''; return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    const width = 300;
+    menuPos = { top: r.bottom + 4, left: Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8)) };
+    menuCol = name;
+  }
 
   // "Which" filter for bulk and column actions: by severity or by the kind
   // of difference (missing in repository / value differs / only in repository).
@@ -222,6 +233,7 @@
   }
 
   function bulkKeys(e) {
+    if (menuCol && e.key === 'Escape') { menuCol = ''; e.preventDefault(); return; }
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !e.target.closest?.('input, select, textarea')) {
       if (undoLabel) { undo(); e.preventDefault(); }
       return;
@@ -395,7 +407,7 @@
   {#if !rows.length}
     <p class="empty">{filter === 'problems' && !query && !focusColumn ? 'Every row matches the repository.' : 'No rows match this filter.'}</p>
   {:else}
-    <div class="scroll" tabindex="-1" style:--row-h="{rowH}px" bind:this={scroller} bind:clientHeight={viewH} onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}>
+    <div class="scroll" tabindex="-1" style:--row-h="{rowH}px" bind:this={scroller} bind:clientHeight={viewH} onscroll={(e) => { scrollTop = e.currentTarget.scrollTop; menuCol = ''; }}>
       <table>
         <thead bind:offsetHeight={headH}>
           <tr>
@@ -409,26 +421,9 @@
                   <div class="h-name">{col.name}</div>
                   {#if col.role !== 'unknown' && col.role !== 'workbench'}
                     <button class="h-menu-btn" aria-label="Actions for column {col.name}" aria-expanded={menuCol === col.name}
-                      onclick={() => (menuCol = menuCol === col.name ? '' : col.name)}>⋯</button>
+                      onclick={(e) => openMenu(e, col.name)}>⋯</button>
                   {/if}
                 </div>
-                {#if menuCol === col.name}
-                  {@const open = columnItems(col.name, 'open').length}
-                  {@const done = columnItems(col.name, 'marked').length}
-                  {@const counts = typeCounts(columnItems(col.name, 'open', 'all'))}
-                  <div class="h-menu" role="menu">
-                    <label class="which">Only
-                      <select bind:value={menuType} aria-label="Which issues in column {col.name}">
-                        {#each TYPES as [t, label]}<option value={t}>{label} ({counts[t]})</option>{/each}
-                      </select>
-                    </label>
-                    <button role="menuitem" disabled={!open} onclick={() => columnAction(col.name, 'resolved')}>✓ Resolve all {open} issue{open === 1 ? '' : 's'} in this column</button>
-                    <button role="menuitem" disabled={!open} onclick={() => columnAction(col.name, 'problem')}>⚑ Mark all {open} as problems</button>
-                    <button role="menuitem" disabled={!open} onclick={() => columnAction(col.name, 'select')}>Select these {open} for review</button>
-                    <button role="menuitem" disabled={!done} onclick={() => columnAction(col.name, 'undo')}>Undo {done} mark{done === 1 ? '' : 's'} in this column</button>
-                    <p class="muted">All rows{typeFilter || query.trim() ? ' matching the type filter / search' : ''}, including ones hidden by the status filters.</p>
-                  </div>
-                {/if}
                 <div class="h-meta">
                   {#if col.role === 'unknown'}<span class="pill skip" title="This column is not mapped to a field, so it was not compared">not mapped</span>
                   {:else if col.role === 'workbench'}<span class="pill skip">workbench option</span>
@@ -497,7 +492,27 @@
   {/if}
 </section>
 
-<svelte:window onkeydown={bulkKeys} onclick={(e) => { if (menuCol && !e.target.closest?.('.h-menu, .h-menu-btn')) menuCol = ''; }} />
+<svelte:window onkeydown={bulkKeys} onresize={() => (menuCol = '')} onscroll={() => (menuCol = '')}
+  onclick={(e) => { if (menuCol && !e.target.closest?.('.h-menu, .h-menu-btn')) menuCol = ''; }} />
+
+<!-- Column ⋯ menu, outside the table so nothing can cover or clip it. -->
+    {#if menuCol}
+      {@const open = columnItems(menuCol, 'open').length}
+      {@const done = columnItems(menuCol, 'marked').length}
+      {@const counts = typeCounts(columnItems(menuCol, 'open', 'all'))}
+      <div class="h-menu" role="menu" style:top="{menuPos.top}px" style:left="{menuPos.left}px">
+        <label class="which">Only
+          <select bind:value={menuType} aria-label="Which issues in column {menuCol}">
+            {#each TYPES as [t, label]}<option value={t}>{label} ({counts[t]})</option>{/each}
+          </select>
+        </label>
+        <button role="menuitem" disabled={!open} onclick={() => columnAction(menuCol, 'resolved')}>✓ Resolve all {open} issue{open === 1 ? '' : 's'} in this column</button>
+        <button role="menuitem" disabled={!open} onclick={() => columnAction(menuCol, 'problem')}>⚑ Mark all {open} as problems</button>
+        <button role="menuitem" disabled={!open} onclick={() => columnAction(menuCol, 'select')}>Select these {open} for review</button>
+        <button role="menuitem" disabled={!done} onclick={() => columnAction(menuCol, 'undo')}>Undo {done} mark{done === 1 ? '' : 's'} in this column</button>
+        <p class="muted">All rows{typeFilter || query.trim() ? ' matching the type filter / search' : ''}, including ones hidden by the status filters.</p>
+      </div>
+    {/if}
 
 {#if bulk.size}
   <div class="bulkbar" role="region" aria-label="Bulk actions">
@@ -551,7 +566,7 @@
   .h-menu-btn { font: inherit; line-height: 1; padding: 0 0.3rem; border: 0; border-radius: 4px; background: none; color: var(--ia-muted); cursor: pointer; }
   .h-menu-btn:hover, .h-menu-btn[aria-expanded='true'] { background: #e9e9ee; color: inherit; }
   .h-menu {
-    position: absolute; z-index: 20; margin-top: 0.25rem; min-width: 17rem;
+    position: fixed; z-index: 600; width: 300px;
     display: flex; flex-direction: column; padding: 0.3rem; font-weight: 400;
     background: var(--ia-surface); border: 1px solid var(--ia-border); border-radius: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
   }
