@@ -63,51 +63,74 @@ export function rowKey(row) {
   return JSON.stringify([row.identifier, ROW, row.notes]);
 }
 
-export function load() {
-  try { return new Set(JSON.parse(localStorage.getItem(STORE) ?? '[]')); } catch { return new Set(); }
+// Two independent mark sets, same key scheme: "resolved" (dealt with; gone
+// from the view and the export) and "problem" (confirmed; gone from the
+// view but kept in the export, flagged). Each in its own localStorage key.
+const STORES = { resolved: STORE, problem: 'sacdaIngestAudit.problems' };
+
+export function load(kind = 'resolved') {
+  try { return new Set(JSON.parse(localStorage.getItem(STORES[kind]) ?? '[]')); } catch { return new Set(); }
 }
 
-export function save(set) {
-  try { localStorage.setItem(STORE, JSON.stringify([...set].slice(-CAP))); } catch { /* storage unavailable */ }
+export function save(set, kind = 'resolved') {
+  try { localStorage.setItem(STORES[kind], JSON.stringify([...set].slice(-CAP))); } catch { /* storage unavailable */ }
 }
 
 const isIssue = (status) => status !== OK && status !== SKIP && status !== INFO;
 
 /**
- * Apply resolved marks: resolved cells read as OK (flagged `resolved`), row
- * status and stats are recomputed. Returns a new result; the original is
- * untouched so un-resolving restores it exactly.
+ * Apply marks: resolved and problem cells both read as OK for row status
+ * and counts (so they leave the main view), keeping the original status in
+ * `resolved` / `flagged`. Problem marks win over resolved ones. Returns a
+ * new result; the original is untouched so unmarking restores it exactly.
  */
-export function applyResolved(result, marks) {
+export function applyResolved(result, marks, problems = new Set()) {
   let resolvedCount = 0;
+  let problemCount = 0;
   const idName = result.columns.find((c) => c.role === 'identifier')?.name;
   const spec = specs(result);
+  const markOf = (set, row, name, cell) => {
+    if (set.has(valueKey(spec.get(name), cell))) return 'value';
+    if (set.has(cellKey(row, spec.get(name), cell))) return 'cell';
+    return null;
+  };
   const rows = result.rows.map((row) => {
-    const rowResolved = row.noteStatus !== OK && marks.has(rowKey(row));
+    const isRowIssue = row.noteStatus !== OK;
+    const rowFlagged = isRowIssue && problems.has(rowKey(row));
+    const rowResolved = isRowIssue && !rowFlagged && marks.has(rowKey(row));
     if (rowResolved) resolvedCount++;
-    let status = rowResolved ? OK : row.noteStatus;
-    let changed = rowResolved;
+    if (rowFlagged) problemCount++;
+    let status = rowResolved || rowFlagged ? OK : row.noteStatus;
+    let changed = rowResolved || rowFlagged;
     const cells = {};
     for (const [name, cell] of Object.entries(row.cells)) {
       // The identifier cell just mirrors the row-level notes (not found,
       // duplicates), which noteStatus already counts.
       if (name === idName) {
-        cells[name] = rowResolved && isIssue(cell.status) ? { ...cell, status: OK, resolved: cell.status } : cell;
+        if (isIssue(cell.status) && rowFlagged) cells[name] = { ...cell, status: OK, flagged: cell.status };
+        else if (isIssue(cell.status) && rowResolved) cells[name] = { ...cell, status: OK, resolved: cell.status };
+        else cells[name] = cell;
         continue;
       }
-      const byValue = isIssue(cell.status) && marks.has(valueKey(spec.get(name), cell));
-      if (isIssue(cell.status) && (byValue || marks.has(cellKey(row, spec.get(name), cell)))) {
-        cells[name] = { ...cell, status: OK, resolved: cell.status, resolvedBy: byValue ? 'value' : 'cell' };
+      const flaggedBy = isIssue(cell.status) ? markOf(problems, row, name, cell) : null;
+      const resolvedBy = isIssue(cell.status) && !flaggedBy ? markOf(marks, row, name, cell) : null;
+      if (flaggedBy) {
+        cells[name] = { ...cell, status: OK, flagged: cell.status, flaggedBy };
+        problemCount++;
+        changed = true;
+      }
+      else if (resolvedBy) {
+        cells[name] = { ...cell, status: OK, resolved: cell.status, resolvedBy };
         resolvedCount++;
         changed = true;
       }
       else {
         cells[name] = cell;
-        const s = cell.status === INFO ? OK : cell.status;
-        if (SEVERITY[s] > SEVERITY[status]) status = s;
+        const st = cell.status === INFO ? OK : cell.status;
+        if (SEVERITY[st] > SEVERITY[status]) status = st;
       }
     }
-    return changed ? { ...row, status, cells, rowResolved } : row;
+    return changed ? { ...row, status, cells, rowResolved, rowFlagged } : row;
   });
-  return { ...result, rows, resolvedCount, stats: summarise(rows, result.columns, result.extra) };
+  return { ...result, rows, resolvedCount, problemCount, stats: summarise(rows, result.columns, result.extra) };
 }

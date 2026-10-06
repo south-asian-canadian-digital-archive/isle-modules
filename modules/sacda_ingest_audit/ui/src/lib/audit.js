@@ -340,18 +340,25 @@ export function summarise(rows, columns, extra) {
   return s;
 }
 
-/** Flatten results to CSV: one line per problem cell / row note. */
+/**
+ * Flatten results to CSV: one line per open issue or confirmed problem.
+ * Resolved issues are left out entirely; issues marked as a problem are
+ * included with review = "confirmed problem".
+ */
 export function issuesCsv(result) {
-  const out = [['line', 'identifier', 'node', 'column', 'status', 'note', 'in_file', 'in_repository']];
+  const out = [['line', 'identifier', 'node', 'column', 'status', 'review', 'note', 'in_file', 'in_repository']];
   for (const r of result.rows) {
     const nid = r.nodes[0]?.nid ?? '';
-    if (!r.nodes.length && !r.rowResolved) out.push([r.line, r.identifier, '', '', r.lookupFailed ? 'unchecked' : ERROR, r.notes.join(' '), '', '']);
+    if (!r.nodes.length && !r.rowResolved) {
+      out.push([r.line, r.identifier, '', '', r.lookupFailed ? 'unchecked' : ERROR, r.rowFlagged ? 'confirmed problem' : '', r.notes.join(' '), '', '']);
+    }
     for (const [name, c] of Object.entries(r.cells)) {
-      if (c.status === OK || c.status === SKIP || (!r.nodes.length)) continue;
-      out.push([r.line, r.identifier, nid, name, c.status, c.note, c.sheet.join(' | '), c.server.join(' | ')]);
+      if (!r.nodes.length || c.status === SKIP || c.resolved) continue;
+      if (c.flagged) out.push([r.line, r.identifier, nid, name, c.flagged, 'confirmed problem', c.note, c.sheet.join(' | '), c.server.join(' | ')]);
+      else if (c.status !== OK) out.push([r.line, r.identifier, nid, name, c.status, '', c.note, c.sheet.join(' | '), c.server.join(' | ')]);
     }
   }
-  for (const n of result.extra) out.push(['', n.identifier, n.nid, '', 'extra', 'In the repository but not in the file', '', n.title]);
+  for (const n of result.extra) out.push(['', n.identifier, n.nid, '', 'extra', '', 'In the repository but not in the file', '', n.title]);
   return out.map((line) => line.map((v) => {
     const s = String(v ?? '');
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;

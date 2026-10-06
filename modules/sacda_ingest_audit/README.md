@@ -38,14 +38,23 @@ Resolved issues drop out of the filters, counts and CSV export; **Show
 resolved** brings them back struck through, and unresolving a group
 unresolves all of it.
 
+**Marking as a problem.** **⚑ Problem** (key <kbd>F</kbd>) is the other
+review outcome: like resolving, it removes the issue (or the whole group of
+identical ones) from the view and the counts, but it **stays in the CSV
+export** with `review = confirmed problem`. The ⚑ chip brings marked
+problems back into view. Resolved issues are never exported. Problem marks
+use the same keys as resolved ones (difference-based, follow the mapping)
+and are stored separately in the browser.
+
 **Reviewing quickly.** After a resolve the panel jumps to the next issue,
 down the same column first, then on to the next column, skipping whatever
 that resolve just covered (untick "Go to next after resolving" to stay
 put). **Previous / Next** walk the same order, over the rows and columns
 currently shown (the chip filters choose which kinds count as issues).
 Keys: <kbd>N</kbd>/<kbd>→</kbd> next, <kbd>P</kbd>/<kbd>←</kbd> previous,
-<kbd>R</kbd> resolve (all identical), <kbd>Shift</kbd>+<kbd>R</kbd> this row
-only, <kbd>U</kbd> undo, <kbd>Esc</kbd> close.
+<kbd>R</kbd> resolve, <kbd>F</kbd> mark as problem (both apply to all
+identical unless "all N identical" is unticked; add <kbd>Shift</kbd> for this
+row only), <kbd>U</kbd> undo, <kbd>Esc</kbd> close.
 
 Marks are keyed on the column's header *and the field it is mapped to*, plus
 both values. So they survive a remap and re-run for every column whose mapping

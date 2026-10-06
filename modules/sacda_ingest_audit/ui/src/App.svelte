@@ -33,32 +33,44 @@
 
   const hasKey = $derived(table ? table.headers.some((h) => mapping[h] === MATCH_KEY) : false);
 
-  // Issues the viewer has marked resolved (this browser only).
-  let marks = $state.raw(loadMarks());
+  // Review marks (this browser only): "resolved" hides an issue everywhere;
+  // "problem" hides it from the view but keeps it in the CSV export.
+  let marks = $state.raw(loadMarks('resolved'));
+  let problems = $state.raw(loadMarks('problem'));
   let showResolved = $state(false);
-  const view = $derived(result ? applyResolved(result, marks) : null);
+  const view = $derived(result ? applyResolved(result, marks, problems) : null);
 
-  // How many issues share each (column, file value, repository value).
+  // How many issues share each (column, difference).
   const sizes = $derived(result ? groupSizes(result) : new Map());
 
-  function update(fn) {
-    const next = new Set(marks);
-    fn(next);
-    marks = next;
-    saveMarks(next);
-  }
-  // scope 'all': this and every identical discrepancy; 'one': this row only.
   // Marks are keyed on header + mapped field (see resolved.js).
   const specOf = (name) => colSpec(result.columns.find((c) => c.name === name) ?? { name });
-  function resolveCell(row, name, cell, scope) {
-    const column = specOf(name);
-    update((m) => m.add(scope === 'all' ? valueKey(column, cell) : cellKey(row, column, cell)));
+
+  function update(fn) {
+    const r = new Set(marks);
+    const p = new Set(problems);
+    fn({ resolved: r, problem: p });
+    marks = r;
+    problems = p;
+    saveMarks(r, 'resolved');
+    saveMarks(p, 'problem');
   }
-  function unresolveCell(row, name, cell) {
+  // kind: 'resolved' | 'problem'; scope 'all': every identical difference, 'one': this row.
+  function markCell(kind, row, name, cell, scope) {
     const column = specOf(name);
-    update((m) => { m.delete(cellKey(row, column, cell)); m.delete(valueKey(column, cell)); });
+    const keys = [valueKey(column, cell), cellKey(row, column, cell)];
+    update((sets) => {
+      for (const set of Object.values(sets)) for (const k of keys) set.delete(k);
+      sets[kind].add(scope === 'all' ? keys[0] : keys[1]);
+    });
   }
-  const toggleRow = (row) => update((m) => { const k = rowKey(row); if (m.has(k)) m.delete(k); else m.add(k); });
+  function unmarkCell(row, name, cell) {
+    const column = specOf(name);
+    update((sets) => { for (const set of Object.values(sets)) { set.delete(valueKey(column, cell)); set.delete(cellKey(row, column, cell)); } });
+  }
+  function markRow(kind, row) {
+    update((sets) => { for (const set of Object.values(sets)) set.delete(rowKey(row)); if (kind) sets[kind].add(rowKey(row)); });
+  }
   const groupSize = (name, cell) => sizes.get(valueKey(specOf(name), cell)) ?? 1;
 
   // The result belongs to the mapping/options it was run with; say so when
@@ -227,7 +239,7 @@
     {/if}
     <Summary result={view} bundles={settings.bundles} ondownload={download} />
     <ResultsTable result={view} bundles={settings.bundles} nodeBase={settings.nodeBase}
-      bind:showResolved onresolve={resolveCell} onunresolve={unresolveCell} ontogglerow={toggleRow} {groupSize} />
+      bind:showResolved onmark={markCell} onunmark={unmarkCell} onmarkrow={markRow} {groupSize} />
     {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} incomplete={view.extraIncomplete} nodeBase={settings.nodeBase} />{/if}
   {/if}
 </div>

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { applyResolved, cellKey, rowKey, valueKey, groupSizes } from './resolved.js';
+import { issuesCsv } from './audit.js';
 
 const cell = (status, sheet = ['a'], server = ['b'], missing = sheet, extra = server) => ({ status, sheet, server, missing, extra, note: '' });
 const result = () => ({
@@ -79,5 +80,32 @@ describe('applyResolved', () => {
     const v = applyResolved(r, new Set([rowKey(r.rows[1])]));
     expect(v.rows[1].rowResolved).toBe(true);
     expect(v.rows[1].status).toBe('ok');
+  });
+});
+
+describe('problem marks and the CSV export', () => {
+  test('a problem leaves the view but stays in the export; resolved leaves both', () => {
+    const r = result();
+    const v = applyResolved(r,
+      new Set([cellKey(r.rows[0], 'date', r.rows[0].cells.date)]),          // resolved
+      new Set([valueKey('title', r.rows[0].cells.title), rowKey(r.rows[1])])); // problems
+    expect(v.rows[0].status).toBe('ok');
+    expect(v.rows[0].cells.title.flagged).toBe('error');
+    expect(v.rows[1].rowFlagged).toBe(true);
+    expect(v.problemCount).toBe(2);
+    expect(v.resolvedCount).toBe(1);
+    const csv = issuesCsv({ ...v, extra: [] }).split('\n');
+    expect(csv[0]).toBe('line,identifier,node,column,status,review,note,in_file,in_repository');
+    expect(csv.some((l) => l.startsWith('2,x1,') && l.includes(',title,error,confirmed problem,'))).toBe(true);
+    expect(csv.some((l) => l.startsWith('3,x2,') && l.includes('confirmed problem'))).toBe(true);
+    expect(csv.some((l) => l.includes(',date,'))).toBe(false); // resolved: not exported
+  });
+
+  test('a problem mark wins over a resolved mark on the same cell', () => {
+    const r = result();
+    const k = valueKey('title', r.rows[0].cells.title);
+    const v = applyResolved(r, new Set([k]), new Set([k]));
+    expect(v.rows[0].cells.title.flagged).toBe('error');
+    expect(v.rows[0].cells.title.resolved).toBeUndefined();
   });
 });

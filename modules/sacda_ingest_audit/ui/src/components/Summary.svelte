@@ -8,7 +8,7 @@
 <section class="card summary" aria-label="Audit summary">
   <div class="head">
     <h2>3. Results</h2>
-    <span class="muted">{result.requests} JSON:API requests · {result.seconds.toFixed(1)}s{result.resolvedCount ? ` · ${result.resolvedCount} marked resolved` : ''}</span>
+    <span class="muted">{result.requests} JSON:API requests · {result.seconds.toFixed(1)}s{result.resolvedCount ? ` · ${result.resolvedCount} marked resolved` : ''}{result.problemCount ? ` · ${result.problemCount} marked as problems` : ''}</span>
     <button class="btn secondary" onclick={ondownload}>Download issues (CSV)</button>
   </div>
 

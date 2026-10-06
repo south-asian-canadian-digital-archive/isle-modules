@@ -1,26 +1,39 @@
 <script>
   let {
-    row, column, nodeBase, onclose, onresolve, onunresolve, ontogglerow, groupSize = 1,
-    position = null, onnext, onprev, autoAdvance = $bindable(true),
+    row, column, nodeBase, onclose, onmark, onunmark, onmarkrow, groupSize = 1,
+    position = null, onnext, onprev, autoAdvance = $bindable(true), onlyThisRow = $bindable(false),
   } = $props();
 
   const LABEL = { ok: 'Matches', info: 'Only in the repository', warn: 'Differs — check it', error: 'Mismatch', skip: 'Not compared' };
   const cell = $derived(row.cells[column.name]);
   const isRowIssue = $derived(column.role === 'identifier' && (row.noteStatus !== 'ok'));
-  const cellIssue = $derived(!!cell.resolved || ['error', 'warn'].includes(cell.status));
+  const marked = $derived(!!(cell.resolved || cell.flagged));
+  const rowMarked = $derived(!!(row.rowResolved || row.rowFlagged));
+  const cellIssue = $derived(marked || ['error', 'warn'].includes(cell.status));
+  const scope = $derived(onlyThisRow || groupSize < 2 ? 'one' : 'all');
   const missing = $derived(new Set(cell.missing));
   const extra = $derived(new Set(cell.extra));
 
-  // Keyboard: N / → next, P / ← previous, R resolve (all identical when
-  // there are any), Shift+R this row only, U unresolve, Esc close.
+  function mark(kind, shift = false) {
+    if (isRowIssue) onmarkrow(kind);
+    else if (cellIssue && !marked) onmark(kind, shift ? 'one' : scope);
+  }
+  function undo() {
+    if (isRowIssue && rowMarked) onmarkrow(null);
+    else if (marked) onunmark();
+  }
+
+  // Keyboard: N / → next, P / ← previous, R resolve, F mark as problem
+  // (Shift = this row only), U undo, Esc close.
   function keydown(e) {
     if (e.target.closest?.('input, select, textarea, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (e.key === 'Escape') onclose();
     else if (k === 'n' || e.key === 'ArrowRight') onnext?.();
     else if (k === 'p' || e.key === 'ArrowLeft') onprev?.();
-    else if (k === 'r' && cellIssue && !cell.resolved) onresolve(e.shiftKey || groupSize < 2 ? 'one' : 'all');
-    else if (k === 'u' && cell.resolved) onunresolve();
+    else if (k === 'r') mark('resolved', e.shiftKey);
+    else if (k === 'f') mark('problem', e.shiftKey);
+    else if (k === 'u') undo();
     else return;
     e.preventDefault();
   }
@@ -36,25 +49,26 @@
         {#if column.label && column.role !== 'unknown'}<span class="muted">({column.label})</span>{/if}
       </div>
       <div class="status">
-        {#if cell.resolved}<span class="pill skip">✓ Marked resolved{cell.resolvedBy === 'value' && groupSize > 1 ? ` with ${groupSize - 1} identical` : ''} (was: {LABEL[cell.resolved]})</span>
+        {#if cell.flagged}<span class="pill problem">⚑ Marked as a problem{cell.flaggedBy === 'value' && groupSize > 1 ? ` with ${groupSize - 1} identical` : ''} (kept in the export)</span>
+        {:else if cell.resolved}<span class="pill skip">✓ Marked resolved{cell.resolvedBy === 'value' && groupSize > 1 ? ` with ${groupSize - 1} identical` : ''} (was: {LABEL[cell.resolved]})</span>
         {:else}<span class="pill {cell.status}">{LABEL[cell.status]}</span>{/if}
         {#if cell.note}<span>{cell.note}</span>{/if}
       </div>
     </div>
     <div class="acts">
-      {#if isRowIssue}
-        <button class="btn secondary" onclick={ontogglerow}>{row.rowResolved ? 'Unresolve row' : 'Mark row resolved'}</button>
-      {:else if cell.resolved}
-        <button class="btn secondary" onclick={onunresolve}>
-          {cell.resolvedBy === 'value' && groupSize > 1 ? `Unresolve all ${groupSize}` : 'Unresolve'}
+      {#if (isRowIssue && rowMarked) || (!isRowIssue && marked)}
+        <button class="btn secondary" onclick={undo}>
+          Undo {(row.rowFlagged || cell.flagged) ? 'problem' : 'resolved'}{!isRowIssue && (cell.resolvedBy === 'value' || cell.flaggedBy === 'value') && groupSize > 1 ? ` (all ${groupSize})` : ''}
         </button>
-      {:else if cellIssue}
-        {#if groupSize > 1}
-          <button class="btn" onclick={() => onresolve('all')} title="Same column, same file value and same repository value">Mark all {groupSize} identical resolved</button>
-          <button class="btn secondary" onclick={() => onresolve('one')}>Only this row</button>
-        {:else}
-          <button class="btn secondary" onclick={() => onresolve('one')}>Mark resolved</button>
+      {:else if isRowIssue || cellIssue}
+        {#if !isRowIssue && groupSize > 1}
+          <label class="scope" title="Same column and the same difference (file vs repository)">
+            <input type="checkbox" checked={!onlyThisRow} onchange={(e) => (onlyThisRow = !e.currentTarget.checked)} />
+            all {groupSize} identical
+          </label>
         {/if}
+        <button class="btn" onclick={() => mark('resolved')}>✓ Resolve</button>
+        <button class="btn problem" onclick={() => mark('problem')} title="Hide from the view but keep it in the CSV export">⚑ Problem</button>
       {/if}
       <button class="close" onclick={onclose} aria-label="Close details">×</button>
     </div>
@@ -90,8 +104,8 @@
       {#if position?.index}Issue {position.index} of {position.total}{:else if position?.total}{position.total} issues{:else}No issues in view{/if}
     </span>
     <button class="btn secondary" onclick={onnext} disabled={!position?.total} aria-label="Next issue">Next →</button>
-    <label class="auto"><input type="checkbox" bind:checked={autoAdvance} /> Go to next after resolving</label>
-    <span class="keys muted"><kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>R</kbd> resolve · <kbd>⇧R</kbd> this row · <kbd>U</kbd> undo · <kbd>Esc</kbd></span>
+    <label class="auto"><input type="checkbox" bind:checked={autoAdvance} /> Go to next after marking</label>
+    <span class="keys muted"><kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>R</kbd> resolve · <kbd>F</kbd> problem · <kbd>⇧</kbd> this row only · <kbd>U</kbd> undo · <kbd>Esc</kbd></span>
   </footer>
 </aside>
 
@@ -109,6 +123,9 @@
   .status { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.35rem; }
   .acts { display: flex; gap: 0.5rem; align-items: center; flex: none; margin-left: auto; }
   .acts .btn { padding: 0.35em 0.8em; font-size: 0.85rem; }
+  .btn.problem { background: #6b3fa0; border-color: #6b3fa0; }
+  .scope { display: inline-flex; gap: 0.3rem; align-items: center; font-size: 0.85rem; white-space: nowrap; }
+  .pill.problem { background: #f3ecfb; color: #6b3fa0; }
   .close { font-size: 1.5rem; line-height: 1; background: none; border: 0; cursor: pointer; color: var(--ia-muted); }
   .notes { margin: 0.75rem 0 0; color: var(--ia-error); }
   .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.75rem; }

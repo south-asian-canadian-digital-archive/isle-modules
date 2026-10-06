@@ -3,7 +3,7 @@
   import CellDetail from './CellDetail.svelte';
   import { difference } from '../lib/resolved.js';
 
-  let { result, bundles, nodeBase, showResolved = $bindable(false), onresolve, onunresolve, ontogglerow, groupSize } = $props();
+  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, groupSize } = $props();
 
   // Virtual scrolling: rows have a fixed height, and only the ones in view
   // (plus OVERSCAN either side) are in the DOM; spacer rows stand in for the
@@ -33,8 +33,9 @@
     ['info', 'i blank in file, set in repository'],
     ['skip', 'not compared'],
     ['resolved', '✓ marked resolved'],
+    ['problem', '⚑ marked problem'],
   ];
-  const kindOf = (cell) => (cell.resolved ? 'resolved' : cell.status);
+  const kindOf = (cell) => (cell.flagged ? 'problem' : cell.resolved ? 'resolved' : cell.status);
 
   // Review flow: Previous/Next walk the issues column by column (down a
   // column first, then on to the next), over the rows and columns currently
@@ -104,8 +105,9 @@
   const next = () => go(selected && findFrom(selected.line, selected.column, 1));
   const prev = () => go(selected && findFrom(selected.line, selected.column, -1));
 
-  // Resolve, then jump to the next issue that this resolve did not cover.
-  function resolveAndAdvance(scope) {
+  // Mark (resolved or problem), then jump to the next issue the mark did not cover.
+  let onlyThisRow = $state(false);
+  function markAndAdvance(kind, scope) {
     const row = selRow;
     const name = selCol.name;
     const cell = row.cells[name];
@@ -114,7 +116,14 @@
       ? (r, n, c) => n === name && JSON.stringify(difference(c)) === sig
       : (r, n) => r.line === row.line && n === name;
     const target = autoAdvance ? findFrom(row.line, name, 1, covered) : null;
-    onresolve(row, name, cell, scope);
+    onmark(kind, row, name, cell, scope);
+    if (target) go(target);
+  }
+
+  function markRowAndAdvance(kind) {
+    const row = selRow;
+    const target = kind && autoAdvance ? findFrom(row.line, selCol.name, 1, (r) => r.line === row.line) : null;
+    onmarkrow(kind, row);
     if (target) go(target);
   }
   // Selection by row line + column name, so it survives re-runs and resolve toggles.
@@ -132,11 +141,12 @@
     return result.rows.filter((r) => {
       if (filter === 'problems' && r.status === 'ok' && !(showResolved && hasResolved(r))) return false;
       if (filter === 'errors' && r.status !== 'error') return false;
-      if (filter === 'missing' && (r.nodes.length || r.lookupFailed || (r.rowResolved && !showResolved))) return false;
+      if (filter === 'missing' && (r.nodes.length || r.lookupFailed || r.rowFlagged || (r.rowResolved && !showResolved))) return false;
       if (typeFilter && r.bundle !== typeFilter) return false;
       if (kinds.length) {
         const names = focusColumn ? [focusColumn] : columns.map((c) => c.name);
-        if (!names.some((n) => r.cells[n] && kinds.includes(kindOf(r.cells[n])))) return false;
+        const rowLevel = (kinds.includes('problem') && r.rowFlagged) || (kinds.includes('resolved') && r.rowResolved);
+        if (!rowLevel && !names.some((n) => r.cells[n] && kinds.includes(kindOf(r.cells[n])))) return false;
       }
       else if (focusColumn && !['error', 'warn'].includes(r.cells[focusColumn]?.status)) return false;
       if (q && !`${r.identifier} ${r.title}`.toLowerCase().includes(q)) return false;
@@ -177,7 +187,7 @@
     all: result.rows.length,
     problems: result.rows.filter((r) => r.status !== 'ok').length,
     errors: result.rows.filter((r) => r.status === 'error').length,
-    missing: result.rows.filter((r) => !r.nodes.length && !r.lookupFailed && !r.rowResolved).length,
+    missing: result.rows.filter((r) => !r.nodes.length && !r.lookupFailed && !r.rowResolved && !r.rowFlagged).length,
   });
 
   function text(cell) {
@@ -188,7 +198,7 @@
 
   // Cells of each kind across the visible columns (resolved only counts when shown).
   const kindCounts = $derived.by(() => {
-    const n = { error: 0, warn: 0, info: 0, skip: 0, resolved: 0 };
+    const n = { error: 0, warn: 0, info: 0, skip: 0, resolved: 0, problem: 0 };
     for (const r of result.rows) for (const c of columns) { const cell = r.cells[c.name]; if (cell) n[kindOf(cell)]++; }
     return n;
   });
@@ -286,7 +296,8 @@
                 <button class="cell-btn" class:selected={selected?.line === row.line && selected?.column === idColumn.name}
                   onclick={() => (selected = { line: row.line, column: idColumn.name })}>
                   <span class="ident">{row.identifier || '(blank)'}</span>
-                  {#if row.rowResolved}<span class="pill skip">✓ resolved</span>
+                  {#if row.rowFlagged}<span class="pill problem">⚑ problem</span>
+                  {:else if row.rowResolved}<span class="pill skip">✓ resolved</span>
                   {:else if row.lookupFailed}<span class="pill warn">not checked</span>
                   {:else if !row.nodes.length}<span class="pill error">not found</span>
                   {:else if row.nodes.length > 1}<span class="pill error">{row.nodes.length} nodes</span>
@@ -301,11 +312,13 @@
               {#each columns as col (col.name)}
                 {@const cell = row.cells[col.name]}
                 <td data-cell="{row.line}|{col.name}" class="c {cell.status}" class:focused={focusColumn === col.name} class:resolved={cell.resolved && showResolved}
+                  class:flagged={cell.flagged && kinds.includes('problem')}
                   class:dim={kinds.length && !kinds.includes(kindOf(cell))}>
                   <button class="cell-btn" class:selected={selected?.line === row.line && selected?.column === col.name}
                     title="{cell.resolved ? 'Marked resolved' : STATUS_LABEL[cell.status]}{cell.note ? ` — ${cell.note}` : ''}"
                     onclick={() => (selected = { line: row.line, column: col.name })}>
-                    {#if cell.resolved && showResolved}<span class="glyph" aria-hidden="true">✓</span>
+                    {#if cell.flagged && kinds.includes('problem')}<span class="glyph" aria-hidden="true">⚑</span>
+                    {:else if cell.resolved && showResolved}<span class="glyph" aria-hidden="true">✓</span>
                     {:else if GLYPH[cell.status]}<span class="glyph" aria-hidden="true">{GLYPH[cell.status]}</span>{/if}
                     <span class="sr">{cell.resolved ? 'Marked resolved' : STATUS_LABEL[cell.status]}:</span>
                     <span class="val" class:from-server={!cell.sheet.length && cell.server.length}>{text(cell)}</span>
@@ -325,9 +338,8 @@
 {#if selRow && selCol}
   <CellDetail row={selRow} column={selCol} {nodeBase} onclose={() => (selected = null)}
     groupSize={groupSize(selCol.name, selRow.cells[selCol.name])}
-    onresolve={resolveAndAdvance} {position} onnext={next} onprev={prev} bind:autoAdvance
-    onunresolve={() => onunresolve(selRow, selCol.name, selRow.cells[selCol.name])}
-    ontogglerow={() => ontogglerow(selRow)} />
+    onmark={markAndAdvance} onmarkrow={markRowAndAdvance} {position} onnext={next} onprev={prev} bind:autoAdvance bind:onlyThisRow
+    onunmark={() => onunmark(selRow, selCol.name, selRow.cells[selCol.name])} />
 {/if}
 
 <style>
@@ -348,6 +360,9 @@
   .sw.off { opacity: 0.45; }
   .sw:focus-visible { outline: 2px solid var(--ia-accent); outline-offset: 1px; }
   td.dim { opacity: 0.35; }
+  .sw.problem, td.flagged { background: #f3ecfb !important; color: #6b3fa0 !important; }
+  .sw.problem { border-color: #d8c6ef; }
+  .pill.problem { background: #f3ecfb; color: #6b3fa0; }
   /* Keep a cell revealed by Previous/Next clear of the sticky columns and header. */
   td.c { scroll-margin-left: 21rem; scroll-margin-top: 6rem; }
   .sw.error { background: var(--ia-error-bg); color: var(--ia-error); border-color: var(--ia-error-line); }
