@@ -53,6 +53,13 @@ problems back into view. Resolved issues are never exported. Problem marks
 use the same keys as resolved ones (difference-based, follow the mapping)
 and are stored separately in the browser.
 
+**Review complete.** Once no issue is left open, a summary replaces "Every
+row matches the repository" (which now appears only when the audit found
+nothing at all). It shows issues found, how many were marked as problems
+(kept in the export) and resolved (left out), each as a share, plus rows now
+clear and nodes not in the file. Clicking a figure filters to those issues,
+and the problems CSV is one click away.
+
 **Bulk marking.** Shift+click selects the rectangle from the last clicked
 cell; Cmd/Ctrl+click adds or removes single cells. A bar then offers
 ✓ Resolve / ⚑ Problem / Undo / Clear (keys R / F / U / Esc) for the issues in

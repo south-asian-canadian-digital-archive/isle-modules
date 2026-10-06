@@ -4,7 +4,7 @@
   import { difference } from '../lib/resolved.js';
   import { differenceTypes } from '../lib/compare.js';
 
-  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize, onundo, undoLabel = '' } = $props();
+  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize, onundo, undoLabel = '', ondownload } = $props();
 
   // Virtual scrolling: rows have a fixed height, and only the ones in view
   // (plus OVERSCAN either side) are in the DOM; spacer rows stand in for the
@@ -132,13 +132,27 @@
   // inside a sticky header cell it was painted over by neighbouring headers
   // (each sticky cell is its own stacking context) and clipped by the scroller.
   let menuPos = $state({ top: 0, left: 0 });
+  let menuH = $state(260);
+  let menuAnchor = null;
+  function placeMenu() {
+    if (!menuAnchor) return;
+    const r = menuAnchor.getBoundingClientRect();
+    // Close once the button itself scrolls out of the table's view.
+    const box = scroller?.getBoundingClientRect();
+    if (box && (r.right < box.left || r.left > box.right || r.bottom < 0 || r.top > window.innerHeight)) { menuCol = ''; return; }
+    const width = 300;
+    const below = r.bottom + 4;
+    const top = below + menuH > window.innerHeight - 8 && r.top - menuH - 4 > 8 ? r.top - menuH - 4 : below;
+    menuPos = { top, left: Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8)) };
+  }
   function openMenu(e, name) {
     if (menuCol === name) { menuCol = ''; return; }
-    const r = e.currentTarget.getBoundingClientRect();
-    const width = 300;
-    menuPos = { top: r.bottom + 4, left: Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8)) };
+    menuAnchor = e.currentTarget;
     menuCol = name;
+    placeMenu();
   }
+  // Re-place once the menu has rendered and its real height is known.
+  $effect(() => { menuH; if (menuCol) placeMenu(); });
 
   // "Which" filter for bulk and column actions: by severity or by the kind
   // of difference (missing in repository / value differs / only in repository).
@@ -330,6 +344,23 @@
     scrollTop = 0;
   });
 
+  // Review progress: issues still open (mismatches + warnings, row-level
+  // included) vs. those already marked one way or the other.
+  // Cell issues outside the identifier column, plus unmarked row-level issues
+  // (not found, duplicates): the identifier cell alone misses duplicates.
+  const openIssues = $derived(
+    Object.entries(result.stats.columns).reduce((n, [name, c]) => (name === idColumn?.name ? n : n + c.error + c.warn), 0)
+    + result.rows.filter((r) => r.noteStatus !== 'ok' && !r.rowResolved && !r.rowFlagged).length,
+  );
+  const reviewed = $derived((result.resolvedCount ?? 0) + (result.problemCount ?? 0));
+  const found = $derived(openIssues + reviewed);
+  const pct = (n) => (found ? Math.round((n / found) * 100) : 0);
+  function showKind(k) {
+    filter = 'all';
+    kinds = [k];
+    if (k === 'resolved') showResolved = true;
+  }
+
   const counts = $derived({
     all: result.rows.length,
     problems: result.rows.filter((r) => r.status !== 'ok').length,
@@ -404,10 +435,42 @@
     <span>Click a cell to compare values and mark it resolved.</span>
   </div>
 
+  {#if !openIssues && reviewed}
+    <div class="done" role="status">
+      <div class="done-head">
+        <strong>Review complete</strong>
+        <span class="muted">{found.toLocaleString()} issue{found === 1 ? '' : 's'} found in {result.rows.length.toLocaleString()} rows · none left open</span>
+      </div>
+      <div class="done-stats">
+        <button class="stat problem" onclick={() => showKind('problem')}>
+          <span class="v">{(result.problemCount ?? 0).toLocaleString()}</span>
+          <span class="l">marked as problems <span class="muted">({pct(result.problemCount ?? 0)}%)</span><br />kept in the CSV export</span>
+        </button>
+        <button class="stat resolved" onclick={() => showKind('resolved')}>
+          <span class="v">{(result.resolvedCount ?? 0).toLocaleString()}</span>
+          <span class="l">resolved, not a problem <span class="muted">({pct(result.resolvedCount ?? 0)}%)</span><br />left out of the export</span>
+        </button>
+        <div class="stat ok">
+          <span class="v">{(result.stats.ok).toLocaleString()}</span>
+          <span class="l">rows now with no open issue<br /><span class="muted">of {result.rows.length.toLocaleString()} in the file</span></span>
+        </div>
+        {#if result.extra?.length}
+          <div class="stat extra">
+            <span class="v">{result.extra.length.toLocaleString()}</span>
+            <span class="l">nodes in the repository<br />not in the file (listed below)</span>
+          </div>
+        {/if}
+      </div>
+      {#if ondownload}<button class="btn" onclick={ondownload}>Download problems (CSV)</button>{/if}
+    </div>
+  {/if}
+
   {#if !rows.length}
-    <p class="empty">{filter === 'problems' && !query && !focusColumn ? 'Every row matches the repository.' : 'No rows match this filter.'}</p>
+    <p class="empty" class:quiet={reviewed}>{filter === 'problems' && !query && !focusColumn && !kinds.length && !typeFilter
+      ? (reviewed ? 'No open issues left.' : 'Every row matches the repository.')
+      : 'No rows match this filter.'}</p>
   {:else}
-    <div class="scroll" tabindex="-1" style:--row-h="{rowH}px" bind:this={scroller} bind:clientHeight={viewH} onscroll={(e) => { scrollTop = e.currentTarget.scrollTop; menuCol = ''; }}>
+    <div class="scroll" tabindex="-1" style:--row-h="{rowH}px" bind:this={scroller} bind:clientHeight={viewH} onscroll={(e) => { scrollTop = e.currentTarget.scrollTop; if (menuCol) placeMenu(); }}>
       <table>
         <thead bind:offsetHeight={headH}>
           <tr>
@@ -448,7 +511,7 @@
             {@const idCell = row.cells[idColumn.name]}
             <tr class="r-{row.status}">
               <td class="sticky c-line num">{row.line}</td>
-              <td class="sticky c-id {row.nodes.length === 1 || row.rowResolved ? '' : row.lookupFailed ? 'warn' : 'error'}" class:resolved={row.rowResolved && showResolved}>
+              <td class="sticky c-id {row.nodes.length === 1 || row.rowResolved || row.rowFlagged ? '' : row.lookupFailed ? 'warn' : 'error'}" class:resolved={row.rowResolved && showResolved}>
                 <button class="cell-btn" class:selected={selected?.line === row.line && selected?.column === idColumn.name}
                   onclick={() => (selected = { line: row.line, column: idColumn.name })}>
                   <span class="ident">{row.identifier || '(blank)'}</span>
@@ -492,7 +555,7 @@
   {/if}
 </section>
 
-<svelte:window onkeydown={bulkKeys} onresize={() => (menuCol = '')} onscroll={() => (menuCol = '')}
+<svelte:window onkeydown={bulkKeys} onresize={placeMenu} onscroll={placeMenu}
   onclick={(e) => { if (menuCol && !e.target.closest?.('.h-menu, .h-menu-btn')) menuCol = ''; }} />
 
 <!-- Column ⋯ menu, outside the table so nothing can cover or clip it. -->
@@ -500,7 +563,7 @@
       {@const open = columnItems(menuCol, 'open').length}
       {@const done = columnItems(menuCol, 'marked').length}
       {@const counts = typeCounts(columnItems(menuCol, 'open', 'all'))}
-      <div class="h-menu" role="menu" style:top="{menuPos.top}px" style:left="{menuPos.left}px">
+      <div class="h-menu" role="menu" style:top="{menuPos.top}px" style:left="{menuPos.left}px" bind:offsetHeight={menuH}>
         <label class="which">Only
           <select bind:value={menuType} aria-label="Which issues in column {menuCol}">
             {#each TYPES as [t, label]}<option value={t}>{label} ({counts[t]})</option>{/each}
@@ -649,5 +712,19 @@
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
   .shown { font-size: 0.85rem; margin-left: auto; }
+  .empty.quiet { background: var(--ia-subtle); color: var(--ia-muted); font-weight: 400; }
+  .done { border: 1px solid #b9e2c4; background: var(--ia-ok-bg); border-radius: 10px; padding: 0.9rem 1rem; margin-bottom: 0.9rem; display: flex; flex-direction: column; gap: 0.75rem; align-items: flex-start; }
+  .done-head { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: baseline; }
+  .done-head strong { color: var(--ia-ok); font-size: 1.05rem; }
+  .done-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.6rem; width: 100%; }
+  .stat { font: inherit; text-align: left; display: flex; gap: 0.7rem; align-items: center; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--ia-border); background: var(--ia-surface); color: inherit; }
+  button.stat { cursor: pointer; }
+  button.stat:hover { border-color: var(--ia-accent); }
+  .stat .v { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+  .stat .l { font-size: 0.8rem; line-height: 1.35; }
+  .stat.problem .v { color: #6b3fa0; }
+  .stat.resolved .v { color: #3d7a52; }
+  .stat.ok .v { color: var(--ia-ok); }
+  .stat.extra .v { color: var(--ia-warn); }
   .btn.undo { padding: 0.3em 0.8em; font-size: 0.85rem; }
 </style>

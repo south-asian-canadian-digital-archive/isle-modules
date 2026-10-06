@@ -22,9 +22,12 @@
   const missing = $derived(new Set(cell.missing.filter((v) => !changedFile.has(v))));
   const extra = $derived(new Set(cell.extra.filter((v) => !changedRepo.has(v))));
 
+  // Marking only acts on something still open; changing an existing mark
+  // goes through Unmark first, so a stray key press never flips it.
   function mark(kind, shift = false) {
+    if (!canMark) return;
     if (isRowIssue) onmarkrow(kind);
-    else if (cellIssue && !marked) onmark(kind, shift ? 'one' : scope);
+    else onmark(kind, shift ? 'one' : scope);
   }
   function undo() {
     if (isRowIssue && rowMarked) onmarkrow(null);
