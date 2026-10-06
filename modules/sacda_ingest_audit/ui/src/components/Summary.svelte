@@ -28,6 +28,12 @@
       <span class="value">{s.notFound}</span>
       <span class="label">rows with no matching node</span>
     </div>
+    {#if s.unchecked}
+      <div class="tile warn">
+        <span class="value">{s.unchecked}</span>
+        <span class="label">rows not checked (lookup failed)</span>
+      </div>
+    {/if}
     <div class="tile" class:bad={s.duplicates}>
       <span class="value">{s.duplicates}</span>
       <span class="label">identifiers on more than one node</span>

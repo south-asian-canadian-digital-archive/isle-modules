@@ -37,7 +37,7 @@
     return result.rows.filter((r) => {
       if (filter === 'problems' && r.status === 'ok' && !(showResolved && hasResolved(r))) return false;
       if (filter === 'errors' && r.status !== 'error') return false;
-      if (filter === 'missing' && (r.nodes.length || (r.rowResolved && !showResolved))) return false;
+      if (filter === 'missing' && (r.nodes.length || r.lookupFailed || (r.rowResolved && !showResolved))) return false;
       if (typeFilter && r.bundle !== typeFilter) return false;
       if (focusColumn && !['error', 'warn'].includes(r.cells[focusColumn]?.status)) return false;
       if (q && !`${r.identifier} ${r.title}`.toLowerCase().includes(q)) return false;
@@ -78,7 +78,7 @@
     all: result.rows.length,
     problems: result.rows.filter((r) => r.status !== 'ok').length,
     errors: result.rows.filter((r) => r.status === 'error').length,
-    missing: result.rows.filter((r) => !r.nodes.length && !r.rowResolved).length,
+    missing: result.rows.filter((r) => !r.nodes.length && !r.lookupFailed && !r.rowResolved).length,
   });
 
   function text(cell) {
@@ -168,11 +168,12 @@
             {@const idCell = row.cells[idColumn.name]}
             <tr class="r-{row.status}">
               <td class="sticky c-line num">{row.line}</td>
-              <td class="sticky c-id {row.nodes.length === 1 || row.rowResolved ? '' : 'error'}" class:resolved={row.rowResolved && showResolved}>
+              <td class="sticky c-id {row.nodes.length === 1 || row.rowResolved ? '' : row.lookupFailed ? 'warn' : 'error'}" class:resolved={row.rowResolved && showResolved}>
                 <button class="cell-btn" class:selected={selected?.line === row.line && selected?.column === idColumn.name}
                   onclick={() => (selected = { line: row.line, column: idColumn.name })}>
                   <span class="ident">{row.identifier || '(blank)'}</span>
                   {#if row.rowResolved}<span class="pill skip">✓ resolved</span>
+                  {:else if row.lookupFailed}<span class="pill warn">not checked</span>
                   {:else if !row.nodes.length}<span class="pill error">not found</span>
                   {:else if row.nodes.length > 1}<span class="pill error">{row.nodes.length} nodes</span>
                   {:else if row.status === 'ok'}<span class="pill ok">✓</span>

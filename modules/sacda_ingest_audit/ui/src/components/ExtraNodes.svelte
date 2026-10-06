@@ -1,5 +1,5 @@
 <script>
-  let { extra, truncated, nodeBase } = $props();
+  let { extra, truncated, incomplete = false, nodeBase } = $props();
 </script>
 
 <section class="card">
@@ -8,7 +8,8 @@
     Nodes under the rows (and parents) this file names, whose identifier does not appear in it: leftovers from an
     earlier ingest, stray duplicates, or rows dropped from the sheet.
   </p>
-  {#if truncated}<p class="pill warn">Stopped after 5,000 nodes; the list is incomplete.</p>{/if}
+  {#if truncated}<p class="pill warn">Stopped after 20,000 nodes; the list is incomplete.</p>{/if}
+  {#if incomplete}<p class="pill warn">Some parents could not be scanned; this list may be incomplete. Run the audit again to retry.</p>{/if}
   {#if extra.length}
     <table>
       <thead><tr><th>Identifier</th><th>Title</th><th>Type</th><th>Parent</th><th>Node</th></tr></thead>

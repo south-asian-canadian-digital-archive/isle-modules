@@ -11,6 +11,12 @@ export const CHUNK = 50; // Values per IN filter: one chunk ≈ one page.
 // Drupal answers from a small PHP-FPM pool (5 workers on DEV); a few more
 // in flight than that keeps it saturated without just queueing.
 const CONCURRENCY = 6;
+// Transient failures (network blips, Cloudflare 52x, PHP-FPM saturation,
+// 429) are retried with backoff before a chunk is given up on.
+const RETRIES = 3;
+const RETRY_STATUS = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]);
+// Keep request URLs well under nginx's 8 KB request-line limit.
+const URL_BUDGET = 6000;
 
 export class Repository {
   /**
@@ -41,20 +47,41 @@ export class Repository {
     }
   }
 
-  get(url) {
-    return this.slot(async () => {
-      this.onRequest(++this.requests);
-      const res = await fetch(url, {
-        credentials: 'same-origin',
-        headers: { Accept: 'application/vnd.api+json' },
-      });
-      if (!res.ok) {
-        let detail = '';
-        try { detail = (await res.json()).errors?.[0]?.detail ?? ''; } catch { /* not JSON */ }
-        throw new Error(`JSON:API ${res.status} for ${new URL(url).pathname}${detail ? `: ${detail}` : ''}`);
+  async get(url) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.slot(() => this.fetchOnce(url));
       }
-      return res.json();
-    });
+      catch (e) {
+        if (!e.retryable || attempt >= RETRIES) throw e;
+        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt + Math.random() * 250));
+      }
+    }
+  }
+
+  async fetchOnce(url) {
+    this.onRequest(++this.requests);
+    let res;
+    try {
+      res = await fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/vnd.api+json' } });
+    }
+    catch (e) {
+      throw Object.assign(new Error(`Network error: ${e.message}`), { retryable: true });
+    }
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).errors?.[0]?.detail ?? ''; } catch { /* not JSON */ }
+      const message = res.status === 403 ? 'Access denied (403); your account may not be allowed to read this content.'
+        : `Server answered ${res.status}${detail ? `: ${detail}` : ''}`;
+      throw Object.assign(new Error(message), { retryable: RETRY_STATUS.has(res.status) });
+    }
+    try {
+      return await res.json();
+    }
+    catch {
+      // An HTML error page with a 200 (e.g. a proxy or login page).
+      throw Object.assign(new Error('Server did not answer with JSON:API data.'), { retryable: true });
+    }
   }
 
   /** GET every page of a collection, returning { data, included }. */
@@ -167,8 +194,26 @@ export function asArray(v) {
   return Array.isArray(v) ? v : [v];
 }
 
+/**
+ * Split values into IN-filter chunks: at most `size` values, and short enough
+ * (encoded) that the request URL stays under URL_BUDGET even for long
+ * identifiers.
+ */
 export function chunks(list, size = CHUNK) {
   const out = [];
-  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  let cur = [];
+  let len = 0;
+  for (const v of list) {
+    // ~45 chars of encoded filter key per value, plus the encoded value.
+    const cost = 45 + encodeURIComponent(v).length;
+    if (cur.length && (cur.length >= size || len + cost > URL_BUDGET)) {
+      out.push(cur);
+      cur = [];
+      len = 0;
+    }
+    cur.push(v);
+    len += cost;
+  }
+  if (cur.length) out.push(cur);
   return out;
 }

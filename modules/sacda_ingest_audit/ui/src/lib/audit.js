@@ -49,9 +49,30 @@ export async function runAudit(table, settings, options, onProgress = () => {}) 
   // Map.
   const jobs = chunks(identifiers);
   report({ stage: checkFiles ? 'Looking up nodes and files' : 'Looking up nodes', done: 0, total: jobs.length });
+  // A job that still fails after retries is recorded, not thrown: its rows
+  // are reported as "could not be checked" and the rest of the audit stands.
+  const failures = [];
+  const lookupFailed = new Map(); // identifier → message
+  const filesFailed = new Map(); // node uuid → message
   const parts = await Promise.all(jobs.map(async (ids) => {
-    const found = await repo.lookup(ids, need);
-    const files = checkFiles && found.nodes.length ? await repo.originalFiles(found.nodes.map((n) => n.id)) : [];
+    let found = { nodes: [], index: new Map() };
+    let files = [];
+    try {
+      found = await repo.lookup(ids, need);
+    }
+    catch (e) {
+      for (const id of ids) lookupFailed.set(id, e.message);
+      failures.push({ stage: 'Node lookup', count: ids.length, message: e.message });
+    }
+    if (checkFiles && found.nodes.length) {
+      try {
+        files = await repo.originalFiles(found.nodes.map((n) => n.id));
+      }
+      catch (e) {
+        for (const n of found.nodes) filesFailed.set(n.id, e.message);
+        failures.push({ stage: 'File check', count: found.nodes.length, message: e.message });
+      }
+    }
     report({ done: progress.done + 1 });
     return { found, files };
   }));
@@ -71,12 +92,13 @@ export async function runAudit(table, settings, options, onProgress = () => {}) 
   }
 
   report({ stage: 'Comparing' });
-  const results = rows.map((row) => compareRow(row, { columns, byIdentifier, sheetCount, index, files, settings, options: opts }));
+  const results = rows.map((row) => compareRow(row, { columns, byIdentifier, sheetCount, index, files, lookupFailed, filesFailed, settings, options: opts }));
 
   let extra = [];
   let truncated = false;
+  let extraIncomplete = false;
   if (options.scanExtra && nodes.length) {
-    ({ extra, truncated } = await scanExtra(repo, nodes, index, rows, opts, new Set(identifiers), report));
+    ({ extra, truncated, incomplete: extraIncomplete } = await scanExtra(repo, nodes, index, rows, opts, new Set(identifiers), report, failures));
   }
 
   return {
@@ -84,6 +106,8 @@ export async function runAudit(table, settings, options, onProgress = () => {}) 
     rows: results,
     extra,
     truncated,
+    extraIncomplete,
+    failures: summariseFailures(failures),
     stats: summarise(results, columns, extra),
     requests: repo.requests,
     seconds: (performance.now() - started) / 1000,
@@ -118,7 +142,7 @@ function fetchPlan(columns, bundles) {
  * into further. A parent the file never names (e.g. a site-wide root
  * collection above a fonds) is deliberately not scanned.
  */
-async function scanExtra(repo, nodes, index, rows, opts, inSheet, report) {
+async function scanExtra(repo, nodes, index, rows, opts, inSheet, report, failures) {
   const named = new Set();
   for (const r of rows) {
     for (const col of [opts.parentColumn, opts.memberColumn]) {
@@ -143,14 +167,24 @@ async function scanExtra(repo, nodes, index, rows, opts, inSheet, report) {
   const extra = [];
   let level = [...frontier];
   let truncated = false;
+  let incomplete = false;
   while (level.length && !truncated) {
     const jobs = chunks(level);
     report({ stage: 'Scanning for nodes missing from the file', done: 0, total: jobs.length });
     let done = 0;
     const found = merge(await Promise.all(jobs.map(async (ids) => {
-      const r = await repo.children(ids);
-      report({ done: ++done });
-      return { data: r.nodes, included: [...r.index.values()] };
+      try {
+        const r = await repo.children(ids);
+        return { data: r.nodes, included: [...r.index.values()] };
+      }
+      catch (e) {
+        incomplete = true;
+        failures.push({ stage: 'Scan for nodes not in the file', count: ids.length, message: e.message });
+        return { data: [], included: [] };
+      }
+      finally {
+        report({ done: ++done });
+      }
     })));
     const next = [];
     for (const n of found.nodes) {
@@ -173,7 +207,7 @@ async function scanExtra(repo, nodes, index, rows, opts, inSheet, report) {
     level = next;
   }
   for (const e of extra) e.parentLabels = e.parents.map((p) => labels.get(p) ?? p);
-  return { extra, truncated };
+  return { extra, truncated, incomplete };
 }
 
 function mayHaveChildren(node, index) {
@@ -183,9 +217,21 @@ function mayHaveChildren(node, index) {
   return !model || !LEAF_MODELS.has(model);
 }
 
+/** One line per stage + message, with how many items it affected. */
+function summariseFailures(failures) {
+  const merged = new Map();
+  for (const f of failures) {
+    const k = `${f.stage}\u0000${f.message}`;
+    if (merged.has(k)) merged.get(k).count += f.count;
+    else merged.set(k, { ...f });
+  }
+  return [...merged.values()];
+}
+
 function compareRow(row, ctx) {
-  const { columns, byIdentifier, sheetCount, index, files, settings, options } = ctx;
+  const { columns, byIdentifier, sheetCount, index, files, lookupFailed, filesFailed, settings, options } = ctx;
   const identifier = norm(row[options.idColumn]);
+  const failedLookup = identifier ? lookupFailed.get(identifier) : null;
   const matches = identifier ? byIdentifier.get(identifier) ?? [] : [];
   const node = matches[0];
   const notes = [];
@@ -195,6 +241,7 @@ function compareRow(row, ctx) {
   const raise = (s) => { if (SEVERITY[s] > SEVERITY[status]) status = s; };
 
   if (!identifier) { notes.push('No identifier in this row.'); raise(ERROR); }
+  else if (failedLookup) { notes.push(`Could not be checked: ${failedLookup} Run the audit again to retry.`); raise(WARN); }
   else if (!node) { notes.push('No node in the repository has this identifier.'); raise(ERROR); }
   if (matches.length > 1) { notes.push(`${matches.length} nodes share this identifier; compared against the first.`); raise(ERROR); }
   if (identifier && sheetCount.get(identifier) > 1) { notes.push('This identifier appears more than once in the file.'); raise(WARN); }
@@ -208,17 +255,22 @@ function compareRow(row, ctx) {
   for (const col of columns) {
     const raw = row[col.name] ?? '';
     if (col.role === 'identifier') {
-      cells[col.name] = { status: node ? OK : ERROR, sheet: [raw], server: node ? [node.attributes.field_identifier] : [], missing: [], extra: [], note: notes.join(' ') };
+      cells[col.name] = { status: node ? OK : failedLookup ? WARN : ERROR, sheet: [raw], server: node ? [node.attributes.field_identifier] : [], missing: [], extra: [], note: notes.join(' ') };
       continue;
     }
     if (!node || col.role === 'workbench' || col.role === 'unknown') {
-      cells[col.name] = skip(raw, !node ? 'Not compared: no matching node.' : col.role === 'unknown' ? 'Column not mapped to a field; not compared.' : 'Workbench ingest option; not stored on the node.');
+      cells[col.name] = skip(raw, failedLookup ? 'Not compared: the lookup failed.' : !node ? 'Not compared: no matching node.' : col.role === 'unknown' ? 'Column not mapped to a field; not compared.' : 'Workbench ingest option; not stored on the node.');
       continue;
     }
     // Workbench fills field_member_of from parent_id; the parent_id column
     // already carries that comparison.
     if (col.target === 'field_member_of' && !raw.trim() && options.parentColumn && String(row[options.parentColumn] ?? '').trim()) {
       cells[col.name] = skip(raw, 'Set from parent_id at ingest; compared in that column.');
+      continue;
+    }
+    if (col.role === 'file' && filesFailed.has(node.id)) {
+      cells[col.name] = { ...skip(raw, `File check failed: ${filesFailed.get(node.id)} Run the audit again to retry.`), status: WARN };
+      raise(WARN);
       continue;
     }
     const field = col.role === 'field' ? fields[col.target] : null;
@@ -242,6 +294,7 @@ function compareRow(row, ctx) {
   return {
     line: row.__line,
     identifier,
+    lookupFailed: !!failedLookup,
     status,
     noteStatus,
     notes,
@@ -261,7 +314,7 @@ function skip(raw, note) {
 export function summarise(rows, columns, extra) {
   const s = {
     rows: rows.length,
-    found: 0, notFound: 0, duplicates: 0,
+    found: 0, notFound: 0, unchecked: 0, duplicates: 0,
     byBundle: {},
     ok: 0, warn: 0, error: 0,
     cells: 0, cellsOk: 0,
@@ -270,7 +323,7 @@ export function summarise(rows, columns, extra) {
   };
   for (const c of columns) s.columns[c.name] = { ok: 0, info: 0, warn: 0, error: 0, skip: 0 };
   for (const r of rows) {
-    if (r.nodes.length) s.found++; else s.notFound++;
+    if (r.nodes.length) s.found++; else if (r.lookupFailed) s.unchecked++; else s.notFound++;
     if (r.bundle) s.byBundle[r.bundle] = (s.byBundle[r.bundle] ?? 0) + 1;
     if (r.nodes.length > 1) s.duplicates++;
     s[r.status]++;
@@ -292,7 +345,7 @@ export function issuesCsv(result) {
   const out = [['line', 'identifier', 'node', 'column', 'status', 'note', 'in_file', 'in_repository']];
   for (const r of result.rows) {
     const nid = r.nodes[0]?.nid ?? '';
-    if (!r.nodes.length && !r.rowResolved) out.push([r.line, r.identifier, '', '', ERROR, r.notes.join(' '), '', '']);
+    if (!r.nodes.length && !r.rowResolved) out.push([r.line, r.identifier, '', '', r.lookupFailed ? 'unchecked' : ERROR, r.notes.join(' '), '', '']);
     for (const [name, c] of Object.entries(r.cells)) {
       if (c.status === OK || c.status === SKIP || (!r.nodes.length)) continue;
       out.push([r.line, r.identifier, nid, name, c.status, c.note, c.sheet.join(' | '), c.server.join(' | ')]);

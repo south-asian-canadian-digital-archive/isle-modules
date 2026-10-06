@@ -7,6 +7,7 @@
   import { issuesCsv } from './lib/audit.js';
   import { suggestMapping, MATCH_KEY } from './lib/compare.js';
   import { audit } from './lib/worker.js';
+  import { buildTable, guessHeaderRow } from './lib/table.js';
   import { load as loadMarks, save as saveMarks, cellKey, rowKey, applyResolved } from './lib/resolved.js';
 
   let { settings } = $props();
@@ -14,8 +15,9 @@
   const REMEMBER = 'sacdaIngestAudit.mapping';
 
   // Raw state: large plain data, replaced wholesale, never mutated in place.
-  let source = $state.raw(null); // { name, sheetNames, tables }
+  let source = $state.raw(null); // { name, sheetNames, matrices, notices }
   let sheet = $state('');
+  let headerRow = $state(1);
   let table = $state.raw(null);
   let loadError = $state('');
 
@@ -64,16 +66,19 @@
   function loaded(workbook) {
     source = workbook;
     result = null;
-    selectSheet(workbook.sheetNames.find((n) => !workbook.tables[n].error) ?? workbook.sheetNames[0]);
+    const first = workbook.sheetNames.find((n) => workbook.matrices[n].length) ?? workbook.sheetNames[0];
+    selectSheet(first);
   }
 
-  function selectSheet(name) {
+  function selectSheet(name, row) {
     sheet = name;
     result = null;
-    const t = source.tables[name];
-    loadError = t.error ?? '';
-    table = t.error ? null : t;
-    if (!table) return;
+    const matrix = source.matrices[name] ?? [];
+    loadError = matrix.length ? '' : `Sheet "${name}" is empty.`;
+    table = null;
+    if (!matrix.length) return;
+    headerRow = row ?? guessHeaderRow(matrix);
+    table = buildTable(matrix, headerRow);
     const saved = remembered();
     const next = suggestMapping(table.headers, settings.bundles);
     for (const h of table.headers) if (h in saved) next[h] = saved[h];
@@ -126,6 +131,16 @@
     {#if source}
       <div class="loaded">
         <strong>{source.name}</strong>
+        {#if source.matrices[sheet]?.length > 1}
+          <label>
+            Header row
+            <select value={headerRow} onchange={(e) => selectSheet(sheet, Number(e.currentTarget.value))}>
+              {#each source.matrices[sheet].slice(0, 10) as cells, i}
+                <option value={i + 1}>{i + 1}: {cells.filter((c) => c.trim()).slice(0, 3).join(', ').slice(0, 40) || '(blank)'}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
         {#if source.sheetNames.length > 1}
           <label>
             Sheet
@@ -140,6 +155,11 @@
       </div>
     {/if}
     {#if loadError}<p class="error" role="alert">{loadError}</p>{/if}
+    {#if (source?.notices?.length || table?.notices?.length)}
+      <ul class="notices" role="status">
+        {#each [...(source?.notices ?? []), ...(table?.notices ?? [])] as n}<li>{n}</li>{/each}
+      </ul>
+    {/if}
   </section>
 
   {#if table}
@@ -183,10 +203,18 @@
         <button class="btn" onclick={run}>Re-run with the new mapping</button>
       </div>
     {/if}
+    {#if view.failures?.length}
+      <div class="failures" role="alert">
+        <strong>Part of the audit could not be completed.</strong> The rest of the results stand; affected rows are marked
+        “not checked”. Run the audit again to retry.
+        <ul>{#each view.failures as f}<li>{f.stage} — {f.count} item{f.count === 1 ? '' : 's'}: {f.message}</li>{/each}</ul>
+        <button class="btn" onclick={run}>Retry</button>
+      </div>
+    {/if}
     <Summary result={view} bundles={settings.bundles} ondownload={download} />
     <ResultsTable result={view} bundles={settings.bundles} nodeBase={settings.nodeBase}
       bind:showResolved ontogglecell={toggleCell} ontogglerow={toggleRow} />
-    {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} nodeBase={settings.nodeBase} />{/if}
+    {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} incomplete={view.extraIncomplete} nodeBase={settings.nodeBase} />{/if}
   {/if}
 </div>
 
@@ -205,5 +233,8 @@
   .actions { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 1rem; }
   .progress { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--ia-muted); }
   .progress progress { width: 16rem; }
+  .failures { margin-bottom: 1rem; padding: 0.75rem 1rem; border-radius: 8px; background: var(--ia-error-bg); color: var(--ia-error); border: 1px solid var(--ia-error-line); }
+  .failures ul { margin: 0.4rem 0 0.6rem; }
+  .notices { margin: 0.75rem 0 0; padding: 0.5rem 0.75rem 0.5rem 1.75rem; border-radius: 6px; background: var(--ia-warn-bg); color: var(--ia-warn); font-size: 0.875rem; }
   .error { color: var(--ia-error); background: var(--ia-error-bg); padding: 0.5rem 0.75rem; border-radius: 6px; margin: 0.75rem 0 0; }
 </style>

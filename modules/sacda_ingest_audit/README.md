@@ -29,6 +29,23 @@ through. A mark covers that exact discrepancy only (identifier, column and both
 values), so if either side changes, the issue reappears. Marks live in the
 viewer's browser (localStorage).
 
+## What does not stop an audit
+
+Problems are repaired or isolated and reported, never fatal to the whole run:
+
+| Problem | Handling |
+|---|---|
+| duplicate header (`repository` twice) | second copy listed as `repository (2)`, not compared unless mapped |
+| blank header with data under it | listed as `(column N)`, not compared unless mapped; empty columns dropped |
+| title row(s) above the headers | header row guessed (first of the top 10 rows with the most filled cells); **Header row** picker to override |
+| header named `__proto__`, `__line`, … | suffixed so it cannot clobber row internals |
+| Windows-1252 CSV (Excel "CSV") | detected and decoded as such, with a notice to save as CSV UTF-8 |
+| no data rows | notice, not an error |
+| transient request failure (network, 429, 5xx, Cloudflare 52x) | retried 3× with backoff |
+| a lookup that still fails | only that chunk's rows are marked **not checked** (never "not found"); a banner lists the failures with a Retry button |
+| file check / extra-node scan fails | affected file cells become warnings, the extra list is flagged incomplete |
+| very long identifiers | IN-filter chunks are sized by URL length, not just count |
+
 ## How it is built
 
 The custom code is deliberately thin. Repository data comes from **core
