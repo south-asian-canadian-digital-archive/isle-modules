@@ -3,7 +3,11 @@
 
   let { result, nodeBase } = $props();
 
-  const PAGE_SIZE = 100;
+  // Virtual scrolling: rows have a fixed height, and only the ones in view
+  // (plus OVERSCAN either side) are in the DOM; spacer rows stand in for the
+  // rest, so 5,000 rows scroll like 30.
+  const ROW_H = 40;
+  const OVERSCAN = 8;
   const GLYPH = { error: '✕', warn: '!', info: 'i' };
   const STATUS_LABEL = { ok: 'Matches', info: 'Only in repository', warn: 'Check', error: 'Mismatch', skip: 'Not compared' };
 
@@ -11,7 +15,10 @@
   let query = $state('');
   let focusColumn = $state('');
   let problemColumnsOnly = $state(false);
-  let page = $state(0);
+  let scroller = $state();
+  let scrollTop = $state(0);
+  let viewH = $state(600);
+  let headH = $state(0);
   let selected = $state(null); // { row, column }
 
   const idColumn = $derived(result.columns.find((c) => c.role === 'identifier'));
@@ -32,11 +39,16 @@
       return true;
     });
   });
-  const pages = $derived(Math.max(1, Math.ceil(rows.length / PAGE_SIZE)));
-  const visible = $derived(rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE));
+  const start = $derived(Math.max(0, Math.floor((scrollTop - headH) / ROW_H) - OVERSCAN));
+  const end = $derived(Math.min(rows.length, start + Math.ceil(viewH / ROW_H) + 2 * OVERSCAN));
+  const visible = $derived(rows.slice(start, end));
 
-  // Any filter change goes back to the first page.
-  $effect(() => { filter; query; focusColumn; page = 0; });
+  // Any filter change goes back to the top.
+  $effect(() => {
+    filter; query; focusColumn;
+    if (scroller) scroller.scrollTop = 0;
+    scrollTop = 0;
+  });
 
   const counts = $derived({
     all: result.rows.length,
@@ -68,6 +80,7 @@
     </div>
     <input type="search" bind:value={query} placeholder="Find identifier or title" aria-label="Find identifier or title" />
     <label class="check"><input type="checkbox" bind:checked={problemColumnsOnly} /> Only columns with issues</label>
+    <span class="muted shown">{rows.length.toLocaleString()} rows</span>
   </div>
 
   {#if focusColumn}
@@ -88,9 +101,9 @@
   {#if !rows.length}
     <p class="empty">{filter === 'problems' && !query && !focusColumn ? 'Every row matches the repository.' : 'No rows match this filter.'}</p>
   {:else}
-    <div class="scroll" tabindex="-1">
+    <div class="scroll" tabindex="-1" bind:this={scroller} bind:clientHeight={viewH} onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}>
       <table>
-        <thead>
+        <thead bind:offsetHeight={headH}>
           <tr>
             <th class="sticky c-line" scope="col">Row</th>
             <th class="sticky c-id" scope="col">{idColumn?.name ?? 'Identifier'}</th>
@@ -99,7 +112,7 @@
               <th scope="col" class:unknown={col.role === 'unknown' || col.role === 'workbench'} class:focused={focusColumn === col.name}>
                 <div class="h-name">{col.name}</div>
                 <div class="h-meta">
-                  {#if col.role === 'unknown'}<span class="pill skip" title="No field with this machine name exists, so the column was not compared">not a field</span>
+                  {#if col.role === 'unknown'}<span class="pill skip" title="This column is not mapped to a field, so it was not compared">not mapped</span>
                   {:else if col.role === 'workbench'}<span class="pill skip">workbench option</span>
                   {:else}
                     <span class="h-label">{col.label}</span>
@@ -117,6 +130,7 @@
           </tr>
         </thead>
         <tbody>
+          {#if start > 0}<tr class="spacer" aria-hidden="true"><td colspan={columns.length + 2} style:height="{start * ROW_H}px"></td></tr>{/if}
           {#each visible as row (row.line)}
             {@const idCell = row.cells[idColumn.name]}
             <tr class="r-{row.status}">
@@ -131,7 +145,7 @@
                   {/if}
                 </button>
                 {#each row.nodes as n}
-                  <a class="node" href="{nodeBase}{n.nid}" target="_blank" rel="noopener" title={n.title}>node/{n.nid}</a>
+                  <a class="node" href="{nodeBase}{n.nid}" target="_blank" rel="noopener" title="{n.title} (node/{n.nid})">↗</a>
                 {/each}
               </td>
               {#each columns as col (col.name)}
@@ -148,17 +162,11 @@
               {/each}
             </tr>
           {/each}
+          {#if end < rows.length}<tr class="spacer" aria-hidden="true"><td colspan={columns.length + 2} style:height="{(rows.length - end) * ROW_H}px"></td></tr>{/if}
         </tbody>
       </table>
     </div>
 
-    {#if pages > 1}
-      <nav class="pager" aria-label="Result pages">
-        <button class="btn secondary" disabled={page === 0} onclick={() => page--}>Previous</button>
-        <span>Page {page + 1} of {pages} · {rows.length} rows</span>
-        <button class="btn secondary" disabled={page >= pages - 1} onclick={() => page++}>Next</button>
-      </nav>
-    {/if}
   {/if}
 </section>
 
@@ -203,15 +211,19 @@
   td.c-line { padding: 0.4rem 0.5rem; color: var(--ia-muted); text-align: right; }
   .num { font-variant-numeric: tabular-nums; }
   td.c-id .ident { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
-  .node { display: inline-block; margin: 0 0.6rem 0.35rem; font-size: 0.75rem; }
+  .node { font-size: 0.8rem; text-decoration: none; padding: 0 0.5rem 0 0.1rem; }
+  td.c-id { white-space: nowrap; overflow: hidden; }
+  td.c-id .cell-btn { display: inline-flex; width: auto; max-width: calc(100% - 1.5rem); vertical-align: middle; }
+  tbody tr:not(.spacer) td { height: 40px; box-sizing: border-box; overflow: hidden; }
+  tr.spacer td { border: 0; padding: 0; background: transparent; }
 
   tr.r-error td.c-line { box-shadow: inset 4px 0 0 #d64550; }
   tr.r-warn td.c-line { box-shadow: inset 4px 0 0 #e0a91b; }
   tr.r-ok td.c-line { box-shadow: inset 4px 0 0 #3fa35b; }
 
   .cell-btn {
-    font: inherit; color: inherit; text-align: left; width: 100%; min-height: 2.1rem;
-    display: flex; gap: 0.35rem; align-items: baseline; flex-wrap: wrap;
+    font: inherit; color: inherit; text-align: left; width: 100%; height: 100%;
+    display: flex; gap: 0.35rem; align-items: center; flex-wrap: nowrap; white-space: nowrap; overflow: hidden;
     background: none; border: 0; padding: 0.4rem 0.6rem; cursor: pointer;
     position: relative; /* anchors the visually-hidden .sr label inside the scroller */
   }
@@ -226,5 +238,5 @@
   td.skip { background: var(--ia-skip-bg); color: var(--ia-skip); }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
-  .pager { display: flex; gap: 1rem; align-items: center; justify-content: center; margin-top: 0.75rem; }
+  .shown { font-size: 0.85rem; margin-left: auto; }
 </style>

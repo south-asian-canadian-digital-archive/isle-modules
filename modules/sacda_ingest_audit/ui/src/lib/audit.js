@@ -1,35 +1,68 @@
-// Orchestrates one audit run: look up every row's node, then compare cells.
-import { Repository, asArray } from './repository.js';
+// Orchestrates one audit run as map-reduce over identifier chunks:
+//   map    — per chunk: look the nodes up, then (same job) fetch their files;
+//            all jobs share the repository's request pool, so they overlap.
+//   reduce — merge the chunk results, compare every row, then scan for nodes
+//            the file does not mention.
+import { Repository, asArray, chunks, merge } from './repository.js';
 import {
-  planColumns, serverItems, compareCell, norm,
+  planColumns, serverItems, compareCell, norm, MATCH_KEY,
   OK, INFO, WARN, ERROR, SKIP, SEVERITY,
 } from './compare.js';
 
+// Models that never have child nodes; everything else may be a container.
+const LEAF_MODELS = new Set(['Image', 'Digital Document', 'Audio', 'Video', 'Binary', 'Page']);
+const DESCENDANT_CAP = 20000;
+const BASE_FIELDS = ['title', MATCH_KEY, 'drupal_internal__nid', 'field_member_of', 'field_model', 'status', 'path'];
+
 /**
  * @param {{headers: string[], rows: object[]}} table
- * @param {object} settings drupalSettings.sacdaIngestAudit
- * @param {{idColumn: string, delimiter: string, strict: boolean, scanExtra: boolean}} options
- * @param {(p: {stage: string, requests?: number}) => void} onProgress
+ * @param {object} settings drupalSettings.sacdaIngestAudit + { origin }
+ * @param {{mapping: object, delimiter: string, strict: boolean, scanExtra: boolean}} options
+ * @param {(p: {stage: string, done: number, total: number, requests: number}) => void} onProgress
  */
 export async function runAudit(table, settings, options, onProgress = () => {}) {
   const started = performance.now();
-  let stage = '';
-  const repo = new Repository(settings, (p) => onProgress({ stage, ...p }));
-  const step = (s) => { stage = s; onProgress({ stage, requests: repo.requests }); };
+  const progress = { stage: '', done: 0, total: 0, requests: 0 };
+  const report = (patch) => { Object.assign(progress, patch); onProgress({ ...progress }); };
+  const repo = new Repository(settings, (requests) => report({ requests }));
 
   const { headers, rows } = table;
-  const { idColumn } = options;
-  const columns = planColumns(headers, settings.bundles, idColumn);
+  const columns = planColumns(headers, settings.bundles, options.mapping);
+  const idCol = columns.find((c) => c.role === 'identifier');
+  if (!idCol) throw new Error(`Map one column to ${MATCH_KEY} so rows can be matched.`);
+  const opts = {
+    ...options,
+    idColumn: idCol.name,
+    parentColumn: columns.find((c) => c.role === 'parent')?.name ?? null,
+    memberColumn: columns.find((c) => c.target === 'field_member_of')?.name ?? null,
+  };
 
   const sheetCount = new Map();
   for (const r of rows) {
-    const id = norm(r[idColumn]);
+    const id = norm(r[opts.idColumn]);
     if (id) sheetCount.set(id, (sheetCount.get(id) ?? 0) + 1);
   }
   const identifiers = [...sheetCount.keys()];
+  const need = fetchPlan(columns, settings.bundles);
+  const checkFiles = columns.some((c) => c.role === 'file');
 
-  step(`Looking up ${identifiers.length} identifiers`);
-  const { nodes, index } = await repo.nodesByIdentifier(identifiers);
+  // Map.
+  const jobs = chunks(identifiers);
+  report({ stage: checkFiles ? 'Looking up nodes and files' : 'Looking up nodes', done: 0, total: jobs.length });
+  const parts = await Promise.all(jobs.map(async (ids) => {
+    const found = await repo.lookup(ids, need);
+    const files = checkFiles && found.nodes.length ? await repo.originalFiles(found.nodes.map((n) => n.id)) : [];
+    report({ done: progress.done + 1 });
+    return { found, files };
+  }));
+
+  // Reduce.
+  const { nodes, index } = merge(parts.map((p) => ({ data: p.found.nodes, included: [...p.found.index.values()] })));
+  const files = new Map();
+  for (const [uuid, entry] of parts.flatMap((p) => p.files)) {
+    if (!files.has(uuid)) files.set(uuid, []);
+    files.get(uuid).push(entry);
+  }
   const byIdentifier = new Map();
   for (const n of nodes) {
     const id = norm(n.attributes.field_identifier);
@@ -37,29 +70,13 @@ export async function runAudit(table, settings, options, onProgress = () => {}) 
     byIdentifier.get(id).push(n);
   }
 
-  let files = new Map();
-  if (columns.some((c) => c.role === 'file') && nodes.length) {
-    step('Checking original files');
-    files = await repo.originalFiles(nodes.map((n) => n.id));
-  }
-
-  step('Comparing');
-  const results = rows.map((row) => compareRow(row, { columns, byIdentifier, sheetCount, index, files, settings, options }));
+  report({ stage: 'Comparing' });
+  const results = rows.map((row) => compareRow(row, { columns, byIdentifier, sheetCount, index, files, settings, options: opts }));
 
   let extra = [];
   let truncated = false;
   if (options.scanExtra && nodes.length) {
-    step('Scanning for nodes missing from the file');
-    const roots = scanRoots(nodes, index, rows, columns);
-    const found = await repo.descendants(roots);
-    truncated = found.truncated;
-    const inSheet = new Set(identifiers);
-    const titles = new Map([...index.values()].filter((r) => r.type.startsWith('node--'))
-      .map((r) => [r.id, r.attributes.field_identifier || r.attributes.title]));
-    for (const n of found.nodes) titles.set(n.uuid, n.identifier || n.title);
-    extra = found.nodes
-      .filter((n) => !inSheet.has(norm(n.identifier)))
-      .map((n) => ({ ...n, parentLabels: n.parents.map((p) => titles.get(p) ?? p) }));
+    ({ extra, truncated } = await scanExtra(repo, nodes, index, rows, opts, new Set(identifiers), report));
   }
 
   return {
@@ -71,6 +88,99 @@ export async function runAudit(table, settings, options, onProgress = () => {}) 
     requests: repo.requests,
     seconds: (performance.now() - started) / 1000,
   };
+}
+
+/** Which node fields to return and which references to embed. */
+function fetchPlan(columns, bundles) {
+  const defs = {};
+  for (const info of Object.values(bundles)) for (const [n, f] of Object.entries(info.fields)) defs[n] ??= f;
+  const fields = new Set(BASE_FIELDS);
+  const include = new Set(['field_member_of', 'field_model']);
+  const vocabularies = new Set(['islandora_models']);
+  for (const c of columns) {
+    if (c.role !== 'field') continue;
+    fields.add(c.target);
+    const f = defs[c.target];
+    if (f?.targetType === 'taxonomy_term' || f?.targetType === 'node') include.add(c.target);
+    if (f?.targetType === 'taxonomy_term') for (const v of f.targetBundles) vocabularies.add(v);
+  }
+  return { fields: [...fields], include: [...include], vocabularies: [...vocabularies] };
+}
+
+/**
+ * Nodes below the rows' parents and containers that the file does not list.
+ *
+ * Starts from (a) parents the file names that are not rows themselves, and
+ * (b) matched rows whose model can hold children (collections, compound
+ * objects, paged content). Leaf items (Image, Digital Document, …) are not
+ * scanned: with thousands of rows that is the difference between a few
+ * dozen requests and thousands. Only newly found extra nodes are descended
+ * into further. A parent the file never names (e.g. a site-wide root
+ * collection above a fonds) is deliberately not scanned.
+ */
+async function scanExtra(repo, nodes, index, rows, opts, inSheet, report) {
+  const named = new Set();
+  for (const r of rows) {
+    for (const col of [opts.parentColumn, opts.memberColumn]) {
+      if (!col) continue;
+      for (const p of String(r[col] ?? '').split(opts.delimiter || '|')) if (p.trim()) named.add(norm(p));
+    }
+  }
+  const frontier = new Set();
+  for (const n of nodes) {
+    if (mayHaveChildren(n, index)) frontier.add(n.id);
+    for (const ref of asArray(n.relationships.field_member_of?.data)) {
+      const parent = index.get(`${ref.type}:${ref.id}`);
+      const ident = norm(parent?.attributes.field_identifier);
+      const nid = String(ref.meta?.drupal_internal__target_id ?? '');
+      if (!inSheet.has(ident) && ((ident && named.has(ident)) || named.has(nid))) frontier.add(ref.id);
+    }
+  }
+
+  const labels = new Map([...index.values()].filter((r) => r.type.startsWith('node--'))
+    .map((r) => [r.id, r.attributes.field_identifier || r.attributes.title]));
+  const seen = new Set(frontier);
+  const extra = [];
+  let level = [...frontier];
+  let truncated = false;
+  while (level.length && !truncated) {
+    const jobs = chunks(level);
+    report({ stage: 'Scanning for nodes missing from the file', done: 0, total: jobs.length });
+    let done = 0;
+    const found = merge(await Promise.all(jobs.map(async (ids) => {
+      const r = await repo.children(ids);
+      report({ done: ++done });
+      return { data: r.nodes, included: [...r.index.values()] };
+    })));
+    const next = [];
+    for (const n of found.nodes) {
+      if (seen.has(n.id)) continue;
+      seen.add(n.id);
+      const identifier = n.attributes.field_identifier ?? '';
+      labels.set(n.id, identifier || n.attributes.title);
+      if (inSheet.has(norm(identifier))) continue;
+      extra.push({
+        uuid: n.id,
+        nid: n.attributes.drupal_internal__nid,
+        bundle: n.type.replace('node--', ''),
+        title: n.attributes.title,
+        identifier,
+        parents: asArray(n.relationships.field_member_of?.data).map((p) => p.id),
+      });
+      if (mayHaveChildren(n, found.index)) next.push(n.id);
+    }
+    if (seen.size >= DESCENDANT_CAP) truncated = true;
+    level = next;
+  }
+  for (const e of extra) e.parentLabels = e.parents.map((p) => labels.get(p) ?? p);
+  return { extra, truncated };
+}
+
+function mayHaveChildren(node, index) {
+  if (node.type !== 'node--islandora_object') return true;
+  const ref = node.relationships.field_model?.data;
+  const model = ref ? index.get(`${ref.type}:${ref.id}`)?.attributes.name : null;
+  return !model || !LEAF_MODELS.has(model);
 }
 
 function compareRow(row, ctx) {
@@ -99,16 +209,16 @@ function compareRow(row, ctx) {
       continue;
     }
     if (!node || col.role === 'workbench' || col.role === 'unknown') {
-      cells[col.name] = skip(raw, !node ? 'Not compared: no matching node.' : col.role === 'unknown' ? 'Not a field on any content type; not compared.' : 'Workbench ingest option; not stored on the node.');
+      cells[col.name] = skip(raw, !node ? 'Not compared: no matching node.' : col.role === 'unknown' ? 'Column not mapped to a field; not compared.' : 'Workbench ingest option; not stored on the node.');
       continue;
     }
     // Workbench fills field_member_of from parent_id; the parent_id column
     // already carries that comparison.
-    if (col.name === 'field_member_of' && !raw.trim() && String(row.parent_id ?? '').trim()) {
+    if (col.target === 'field_member_of' && !raw.trim() && options.parentColumn && String(row[options.parentColumn] ?? '').trim()) {
       cells[col.name] = skip(raw, 'Set from parent_id at ingest; compared in that column.');
       continue;
     }
-    const field = col.role === 'field' ? fields[col.name] : null;
+    const field = col.role === 'field' ? fields[col.target] : null;
     if (col.role === 'field' && !field) {
       cells[col.name] = raw.trim()
         ? { ...skip(raw, `Not a field on "${bundle}" content, so this value was not ingested.`), status: WARN }
@@ -116,7 +226,7 @@ function compareRow(row, ctx) {
       raise(cells[col.name].status);
       continue;
     }
-    const items = serverItems(node, col.name, col.kind, index, { files: files.get(node.id) });
+    const items = serverItems(node, col.target, col.kind, index, { files: files.get(node.id) });
     const multi = col.role === 'parent' || col.role === 'file' ? true : field ? field.cardinality !== 1 : false;
     const cell = compareCell(raw, items, col, { field, multi, delimiter: options.delimiter, strict: options.strict });
     cells[col.name] = cell;
@@ -134,7 +244,7 @@ function compareRow(row, ctx) {
     counts,
     bundle,
     nodes: matches.map((n) => ({ nid: n.attributes.drupal_internal__nid, uuid: n.id, title: n.attributes.title, bundle: n.type.replace('node--', '') })),
-    title: node?.attributes.title ?? row.title ?? '',
+    title: node?.attributes.title ?? '',
     cells,
   };
 }
@@ -142,30 +252,6 @@ function compareRow(row, ctx) {
 function skip(raw, note) {
   const v = String(raw ?? '').trim();
   return { status: SKIP, sheet: v ? [v] : [], server: [], missing: [], extra: [], note };
-}
-
-/**
- * Where to look for nodes the file does not mention: every matched node,
- * plus any parent the file names (parent_id / field_member_of) that is not a
- * row itself. A parent the file never names (e.g. a site-wide root
- * collection above a fonds) is deliberately not scanned.
- */
-function scanRoots(nodes, index, rows, columns) {
-  const named = new Set();
-  for (const r of rows) {
-    if (columns.some((c) => c.name === 'parent_id')) for (const p of String(r.parent_id ?? '').split('|')) if (p.trim()) named.add(norm(p));
-    if (columns.some((c) => c.name === 'field_member_of')) for (const p of String(r.field_member_of ?? '').split('|')) if (p.trim()) named.add(norm(p));
-  }
-  const roots = new Set(nodes.map((n) => n.id));
-  for (const n of nodes) {
-    for (const ref of asArray(n.relationships.field_member_of?.data)) {
-      const parent = index.get(`${ref.type}:${ref.id}`);
-      const ident = norm(parent?.attributes.field_identifier);
-      const nid = String(ref.meta?.drupal_internal__target_id ?? '');
-      if ((ident && named.has(ident)) || named.has(nid)) roots.add(ref.id);
-    }
-  }
-  return [...roots];
 }
 
 function summarise(rows, columns, extra) {

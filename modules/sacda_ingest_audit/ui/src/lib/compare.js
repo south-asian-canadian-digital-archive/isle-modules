@@ -44,31 +44,100 @@ export function kindOf(field) {
   }
 }
 
+// Mapping targets that are not plain fields. The column mapped to MATCH_KEY
+// is what rows are matched on.
+export const MATCH_KEY = 'field_identifier';
+const SPECIAL = {
+  parent_id: { role: 'parent', label: 'Parent (by identifier)', kind: 'node' },
+  file: { role: 'file', label: 'Original file', kind: 'file' },
+  url_alias: { role: 'alias', label: 'URL alias', kind: 'text' },
+  published: { role: 'published', label: 'Published', kind: 'bool' },
+};
+
+// Common spellings of the special columns in hand-made sheets.
+const ALIASES = {
+  identifier: MATCH_KEY, accessidentifier: MATCH_KEY, objectidentifier: MATCH_KEY, objectid: MATCH_KEY,
+  parent: 'parent_id', parentid: 'parent_id', parentidentifier: 'parent_id', memberof: 'parent_id',
+  filename: 'file', filepath: 'file', urlalias: 'url_alias', alias: 'url_alias', status: 'published',
+};
+
+const key = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+function fieldIndex(bundles) {
+  const fields = new Map();
+  for (const info of Object.values(bundles)) {
+    for (const [name, f] of Object.entries(info.fields)) if (!fields.has(name)) fields.set(name, f);
+  }
+  return fields;
+}
+
+/** Mapping targets for the UI, grouped. */
+export function targetOptions(bundles) {
+  const fields = [...fieldIndex(bundles)]
+    .filter(([name]) => name !== MATCH_KEY)
+    .map(([value, f]) => ({ value, label: `${f.label} (${value})` }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  return [
+    { group: 'Match rows on', options: [{ value: MATCH_KEY, label: `Identifier (${MATCH_KEY})` }] },
+    { group: 'Workbench columns', options: Object.entries(SPECIAL).map(([value, s]) => ({ value, label: `${s.label} (${value})` })) },
+    { group: 'Fields', options: fields },
+  ];
+}
+
 /**
- * Decide what each spreadsheet column is.
- * Returns [{ name, role, label, kind?, fuzzy? }] in header order.
+ * Best guess at what each column is: its exact machine name, a common alias,
+ * or a field whose label or name matches ignoring case and punctuation
+ * ("Identifier" → field_identifier). Only one column ever gets the match key.
+ * Returns { header: target | '' }.
+ */
+export function suggestMapping(headers, bundles) {
+  const fields = fieldIndex(bundles);
+  const byKey = new Map();
+  for (const [name, f] of fields) {
+    for (const k of [key(name), key(name.replace(/^field_/, '')), key(f.label)]) if (k && !byKey.has(k)) byKey.set(k, name);
+  }
+  const mapping = {};
+  let keyTaken = false;
+  const pick = (h) => {
+    if (fields.has(h) || h in SPECIAL) return h;
+    if (WORKBENCH_ONLY.has(h)) return '';
+    return ALIASES[key(h)] ?? byKey.get(key(h)) ?? '';
+  };
+  for (const h of headers) {
+    let t = pick(h);
+    if (t === MATCH_KEY) {
+      if (keyTaken) t = '';
+      keyTaken = true;
+    }
+    mapping[h] = t;
+  }
+  // Workbench's own `id` usually equals the identifier; use it as a last resort.
+  if (!keyTaken && headers.includes('id')) mapping.id = MATCH_KEY;
+  return mapping;
+}
+
+/**
+ * Decide what each spreadsheet column is, given header → target mapping.
+ * Returns [{ name, target, role, label, kind?, fuzzy? }] in header order.
  * role: identifier | parent | file | alias | published | field | workbench | unknown
  */
-export function planColumns(headers, bundles, idColumn) {
-  const fieldsByName = new Map();
-  for (const info of Object.values(bundles)) {
-    for (const [name, f] of Object.entries(info.fields)) {
-      if (!fieldsByName.has(name)) fieldsByName.set(name, f);
-    }
-  }
+export function planColumns(headers, bundles, mapping = suggestMapping(headers, bundles)) {
+  const fields = fieldIndex(bundles);
+  let keyDone = false;
   return headers.map((name) => {
-    if (name === idColumn) return { name, role: 'identifier', label: 'Identifier (match key)' };
-    if (name === 'parent_id') return { name, role: 'parent', label: 'Parent (by identifier)', kind: 'node' };
-    if (name === 'file') return { name, role: 'file', label: 'Original file', kind: 'file' };
-    if (name === 'url_alias') return { name, role: 'alias', label: 'URL alias', kind: 'text' };
-    if (name === 'published') return { name, role: 'published', label: 'Published', kind: 'bool' };
-    if (fieldsByName.has(name)) {
-      const f = fieldsByName.get(name);
-      const kind = kindOf(f);
-      return { name, role: 'field', label: f.label, kind, fuzzy: FUZZY_KINDS.has(kind) };
+    const target = mapping[name] ?? '';
+    if (target === MATCH_KEY && !keyDone) {
+      keyDone = true;
+      return { name, target, role: 'identifier', label: 'Identifier (match key)' };
     }
-    if (WORKBENCH_ONLY.has(name)) return { name, role: 'workbench', label: 'Workbench option' };
-    return { name, role: 'unknown', label: 'Not a field' };
+    if (target in SPECIAL) return { name, target, ...SPECIAL[target] };
+    if (fields.has(target)) {
+      const f = fields.get(target);
+      const kind = kindOf(f);
+      return { name, target, role: 'field', label: target === name ? f.label : `→ ${f.label} (${target})`, kind, fuzzy: FUZZY_KINDS.has(kind) };
+    }
+    if (WORKBENCH_ONLY.has(name)) return { name, target: '', role: 'workbench', label: 'Workbench option' };
+    return { name, target: '', role: 'unknown', label: 'Not mapped' };
   });
 }
 
@@ -267,15 +336,23 @@ export function compareCell(raw, items, column, { field, multi, delimiter = '|',
 
   if (!tokens.length && !items.length) return result;
   if (!tokens.length) {
-    result.status = INFO;
     result.extra = result.server;
-    result.note = 'Blank in the file, but the repository has a value.';
+    // Media is checked both ways: a node with no file in the sheet should
+    // not have picked up an original file from somewhere.
+    if (column.role === 'file') {
+      result.status = ERROR;
+      result.note = 'The file column is blank, but this node has Original File media.';
+    }
+    else {
+      result.status = INFO;
+      result.note = 'Blank in the file, but the repository has a value.';
+    }
     return result;
   }
   if (!items.length) {
     result.status = ERROR;
     result.missing = tokens;
-    result.note = column.role === 'file' ? 'No original file attached to this node.' : 'Missing in the repository.';
+    result.note = column.role === 'file' ? 'The file column names a file, but this node has no Original File media.' : 'Missing in the repository.';
     return result;
   }
 
@@ -315,7 +392,7 @@ export function compareCell(raw, items, column, { field, multi, delimiter = '|',
   else {
     result.note = result.missing.length && result.extra.length ? 'Values differ.'
       : result.missing.length ? 'Some values from the file are not in the repository.'
-        : 'The repository has extra values.';
+        : column.role === 'file' ? 'The node has more Original File media than the file column lists.' : 'The repository has extra values.';
   }
   return result;
 }

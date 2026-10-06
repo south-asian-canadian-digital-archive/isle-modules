@@ -1,11 +1,14 @@
 # Built from ui/ with `bun run build` (see README). dist/ is committed because
 # the Drupal image build does not run a JS toolchain.
+#
+# No `version`, and not preprocessed: the files keep fixed names across
+# builds, so the URL must carry Drupal's css_js_query_string (regenerated on
+# every `drush cr`) or Cloudflare keeps serving the previous build for good.
 app:
-  version: VERSION
   js:
     dist/ingest-audit.js: { attributes: { defer: true }, preprocess: false, minified: true }
   css:
     component:
-      dist/ingest-audit.css: {}
+      dist/ingest-audit.css: { preprocess: false }
   dependencies:
     - core/drupalSettings

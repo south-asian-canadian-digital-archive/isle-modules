@@ -164,15 +164,26 @@ class IngestAuditController extends ControllerBase {
   }
 
   /**
-   * Media bundles whose source is a file, keyed to their source field.
+   * Media bundles that hold original files, keyed to their source field.
+   *
+   * Only bundles with at least one OriginalFile media are returned: each
+   * bundle costs one request per chunk of rows, and derivative-only bundles
+   * (extracted text, FITS) would never match.
    *
    * @return array<string, string>
    */
   protected function mediaSourceFields(): array {
+    $used = $this->entityTypeManager()->getStorage('media')->getAggregateQuery()
+      ->accessCheck(FALSE)
+      ->condition('field_media_use.entity.field_external_uri.uri', self::ORIGINAL_FILE_USE)
+      ->groupBy('bundle')
+      ->execute();
+    $used = array_column($used, 'bundle');
+
     $map = [];
     foreach ($this->entityTypeManager()->getStorage('media_type')->loadMultiple() as $id => $type) {
       $field = $type->getSource()->getSourceFieldDefinition($type);
-      if ($field && in_array($field->getType(), ['file', 'image'], TRUE)) {
+      if ($field && in_array($field->getType(), ['file', 'image'], TRUE) && (!$used || in_array($id, $used, TRUE))) {
         $map[$id] = $field->getName();
       }
     }

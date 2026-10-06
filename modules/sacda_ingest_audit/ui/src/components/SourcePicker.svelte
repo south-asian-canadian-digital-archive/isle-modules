@@ -1,5 +1,6 @@
 <script>
-  import { ACCEPT, readFile, readGoogleSheet } from '../lib/sheet.js';
+  import { ACCEPT, fetchGoogleSheet } from '../lib/source.js';
+  import { parse } from '../lib/worker.js';
 
   let { sheetEndpoint, onloaded } = $props();
 
@@ -26,7 +27,7 @@
 
   function pick(files) {
     const file = files?.[0];
-    if (file) load(() => readFile(file));
+    if (file) load(() => parse(file.name, file));
   }
 
   function drop(e) {
@@ -57,7 +58,7 @@
   </button>
   <input bind:this={input} type="file" accept={ACCEPT} hidden onchange={(e) => pick(e.currentTarget.files)} />
 {:else}
-  <form class="gsheet" onsubmit={(e) => { e.preventDefault(); if (url.trim()) load(() => readGoogleSheet(url.trim(), sheetEndpoint)); }}>
+  <form class="gsheet" onsubmit={(e) => { e.preventDefault(); if (url.trim()) load(async () => parse('Google Sheet', await fetchGoogleSheet(url.trim(), sheetEndpoint))); }}>
     <input type="url" bind:value={url} placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=0" required />
     <button class="btn" disabled={busy}>{busy ? 'Fetching…' : 'Load sheet'}</button>
   </form>

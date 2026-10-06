@@ -1,56 +1,72 @@
 <script>
   import SourcePicker from './components/SourcePicker.svelte';
+  import ColumnMapper from './components/ColumnMapper.svelte';
   import Summary from './components/Summary.svelte';
   import ResultsTable from './components/ResultsTable.svelte';
   import ExtraNodes from './components/ExtraNodes.svelte';
-  import { runAudit, issuesCsv } from './lib/audit.js';
+  import { issuesCsv } from './lib/audit.js';
+  import { suggestMapping, MATCH_KEY } from './lib/compare.js';
+  import { audit } from './lib/worker.js';
 
   let { settings } = $props();
 
+  const REMEMBER = 'sacdaIngestAudit.mapping';
+
   // Raw state: large plain data, replaced wholesale, never mutated in place.
-  let source = $state.raw(null); // { name, sheetNames, table() }
+  let source = $state.raw(null); // { name, sheetNames, tables }
   let sheet = $state('');
   let table = $state.raw(null);
   let loadError = $state('');
 
-  let idColumn = $state('field_identifier');
+  let mapping = $state({});
   let delimiter = $state('|');
   let strict = $state(false);
   let scanExtra = $state(true);
 
   let running = $state(false);
-  let progress = $state({ stage: '', requests: 0 });
+  let progress = $state({ stage: '', done: 0, total: 0, requests: 0 });
   let runError = $state('');
   let result = $state.raw(null);
+
+  const hasKey = $derived(table ? table.headers.some((h) => mapping[h] === MATCH_KEY) : false);
+
+  // Per-viewer convenience only: remembered column choices, by header name.
+  function remembered() {
+    try { return JSON.parse(localStorage.getItem(REMEMBER) ?? '{}') ?? {}; } catch { return {}; }
+  }
+  function remember(header, target) {
+    try { localStorage.setItem(REMEMBER, JSON.stringify({ ...remembered(), [header]: target })); } catch { /* storage unavailable */ }
+  }
 
   function loaded(workbook) {
     source = workbook;
     result = null;
-    selectSheet(workbook.sheetNames[0]);
+    selectSheet(workbook.sheetNames.find((n) => !workbook.tables[n].error) ?? workbook.sheetNames[0]);
   }
 
   function selectSheet(name) {
     sheet = name;
-    loadError = '';
-    table = null;
-    try {
-      table = source.table(name);
-      if (!table.headers.includes(idColumn)) {
-        idColumn = table.headers.includes('field_identifier') ? 'field_identifier'
-          : table.headers.includes('id') ? 'id' : table.headers[0];
-      }
-    }
-    catch (e) {
-      loadError = e.message;
-    }
+    result = null;
+    const t = source.tables[name];
+    loadError = t.error ?? '';
+    table = t.error ? null : t;
+    if (!table) return;
+    const saved = remembered();
+    const next = suggestMapping(table.headers, settings.bundles);
+    for (const h of table.headers) if (h in saved) next[h] = saved[h];
+    // A remembered match key can clash with a suggested one; keep the first.
+    let key = false;
+    for (const h of table.headers) if (next[h] === MATCH_KEY) { if (key) next[h] = ''; key = true; }
+    mapping = next;
   }
 
   async function run() {
     running = true;
     runError = '';
     result = null;
+    progress = { stage: 'Starting', done: 0, total: 0, requests: 0 };
     try {
-      result = await runAudit(table, settings, { idColumn, delimiter: delimiter || '|', strict, scanExtra },
+      result = await audit(table, $state.snapshot(settings), { mapping: $state.snapshot(mapping), delimiter: delimiter || '|', strict, scanExtra },
         (p) => { progress = p; });
     }
     catch (e) {
@@ -104,13 +120,8 @@
   {#if table}
     <section class="card">
       <h2>2. Compare</h2>
+      <ColumnMapper headers={table.headers} rows={table.rows} bundles={settings.bundles} bind:mapping onchange={remember} />
       <div class="options">
-        <label>
-          Match rows on
-          <select bind:value={idColumn}>
-            {#each table.headers as h}<option value={h}>{h}</option>{/each}
-          </select>
-        </label>
         <label>
           Multi-value separator
           <input class="narrow" bind:value={delimiter} maxlength="3" />
@@ -125,9 +136,13 @@
         </label>
       </div>
       <div class="actions">
-        <button class="btn" onclick={run} disabled={running}>{running ? 'Auditing…' : 'Run audit'}</button>
+        <button class="btn" onclick={run} disabled={running || !hasKey}>{running ? 'Auditing…' : 'Run audit'}</button>
+        {#if !hasKey}<span class="muted">Map a column to the identifier first.</span>{/if}
         {#if running}
-          <span class="muted" aria-live="polite">{progress.stage}… {progress.requests} requests</span>
+          <div class="progress" aria-live="polite">
+            <span>{progress.stage}{progress.total ? ` · ${progress.done}/${progress.total}` : ''} · {progress.requests} requests</span>
+            {#if progress.total}<progress max={progress.total} value={progress.done}></progress>{/if}
+          </div>
         {/if}
       </div>
       {#if runError}<p class="error" role="alert">{runError}</p>{/if}
@@ -148,6 +163,8 @@
   .options label { display: inline-flex; gap: 0.5rem; align-items: center; }
   .options select, .options input:not([type]) { font: inherit; padding: 0.3em 0.5em; border: 1px solid var(--ia-border); border-radius: 4px; }
   .narrow { width: 3.5em; text-align: center; }
-  .actions { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 1rem; }
+  .progress { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--ia-muted); }
+  .progress progress { width: 16rem; }
   .error { color: var(--ia-error); background: var(--ia-error-bg); padding: 0.5rem 0.75rem; border-radius: 6px; margin: 0.75rem 0 0; }
 </style>

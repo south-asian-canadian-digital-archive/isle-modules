@@ -1,35 +1,60 @@
 // Reads repository state through core JSON:API. Nothing here is custom
 // server code: nodes, terms, parents, media and files all come from the
 // standard /jsonapi resources with the current user's session and access.
+//
+// Every request goes through one shared pool, so work from different stages
+// (node lookups, file checks, child scans) interleaves and keeps the server's
+// PHP workers busy instead of waiting at stage boundaries.
 
 const PAGE = 50; // JSON:API's hard maximum page size.
-const CHUNK = 40; // Values per IN filter; keeps URLs well under limits.
-const CONCURRENCY = 4;
-const DESCENDANT_CAP = 5000;
+export const CHUNK = 50; // Values per IN filter: one chunk ≈ one page.
+// Drupal answers from a small PHP-FPM pool (5 workers on DEV); a few more
+// in flight than that keeps it saturated without just queueing.
+const CONCURRENCY = 6;
 
 export class Repository {
-  constructor(settings, onProgress = () => {}) {
-    this.base = settings.jsonapi.replace(/\/$/, '');
+  /**
+   * @param {object} settings drupalSettings.sacdaIngestAudit, plus `origin`
+   *   (absolute URLs are required inside a Web Worker).
+   * @param {(n: number) => void} onRequest called with the running request count
+   */
+  constructor(settings, onRequest = () => {}) {
+    this.base = new URL(settings.jsonapi, settings.origin).href.replace(/\/$/, '');
     this.bundles = settings.bundles;
     this.mediaBundles = settings.mediaBundles;
     this.originalFileUse = settings.originalFileUse;
-    this.onProgress = onProgress;
+    this.onRequest = onRequest;
     this.requests = 0;
+    this.active = 0;
+    this.waiting = [];
   }
 
-  async get(url) {
-    this.requests++;
-    this.onProgress({ requests: this.requests });
-    const res = await fetch(url, {
-      credentials: 'same-origin',
-      headers: { Accept: 'application/vnd.api+json' },
-    });
-    if (!res.ok) {
-      let detail = '';
-      try { detail = (await res.json()).errors?.[0]?.detail ?? ''; } catch { /* ignore */ }
-      throw new Error(`JSON:API ${res.status} for ${new URL(url, location.href).pathname}${detail ? `: ${detail}` : ''}`);
+  async slot(fn) {
+    if (this.active >= CONCURRENCY) await new Promise((resolve) => this.waiting.push(resolve));
+    this.active++;
+    try {
+      return await fn();
     }
-    return res.json();
+    finally {
+      this.active--;
+      this.waiting.shift()?.();
+    }
+  }
+
+  get(url) {
+    return this.slot(async () => {
+      this.onRequest(++this.requests);
+      const res = await fetch(url, {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/vnd.api+json' },
+      });
+      if (!res.ok) {
+        let detail = '';
+        try { detail = (await res.json()).errors?.[0]?.detail ?? ''; } catch { /* not JSON */ }
+        throw new Error(`JSON:API ${res.status} for ${new URL(url).pathname}${detail ? `: ${detail}` : ''}`);
+      }
+      return res.json();
+    });
   }
 
   /** GET every page of a collection, returning { data, included }. */
@@ -46,54 +71,47 @@ export class Repository {
     return { data, included };
   }
 
-  collectionUrl(type, bundle, params) {
+  url(type, bundle, params) {
     const q = new URLSearchParams(params);
     q.set('page[limit]', String(PAGE));
     return `${this.base}/${type}/${bundle}?${q}`;
   }
 
   /**
-   * Nodes whose field_identifier is in `identifiers`, across every bundle
-   * that has the field. Returns { nodes: [resource], index: Map(type--id → resource) }.
+   * Nodes of any bundle with field_identifier in `identifiers` (≤ CHUNK).
+   * `need` = { fields: node fields to return, include: reference fields to
+   * embed, vocabularies: term bundles those references can point at }.
    */
-  async nodesByIdentifier(identifiers) {
-    const tasks = [];
-    for (const [bundle, info] of Object.entries(this.bundles)) {
-      const include = relationshipFields(info.fields).join(',');
-      for (const chunk of chunks(identifiers, CHUNK)) {
-        const params = filterIn('ident', 'field_identifier', chunk);
-        if (include) params.include = include;
-        tasks.push(() => this.all(this.collectionUrl('node', bundle, params)));
-      }
-    }
-    return merge(await pool(tasks));
+  async lookup(identifiers, need) {
+    const sparse = {};
+    for (const b of Object.keys(this.bundles)) sparse[`fields[node--${b}]`] = need.fields.join(',');
+    for (const v of need.vocabularies) sparse[`fields[taxonomy_term--${v}]`] = 'name,field_external_uri,field_authority_link';
+    const parts = await Promise.all(Object.entries(this.bundles).map(([bundle, info]) => {
+      const include = need.include.filter((f) => f in info.fields);
+      const params = { ...filterIn('ident', 'field_identifier', identifiers), ...sparse };
+      if (include.length) params.include = include.join(',');
+      return this.all(this.url('node', bundle, params));
+    }));
+    return merge(parts);
   }
 
   /**
-   * Original-file media for the given node UUIDs, with their files.
-   * Returns Map(nodeUuid → [{ media, filename, mime, bundle }]).
+   * Original-file media for the given node UUIDs (≤ CHUNK), with filenames.
+   * Returns [[nodeUuid, { mediaId, name, filename, mime, bundle }]].
    */
   async originalFiles(nodeUuids) {
-    const tasks = [];
-    for (const [bundle, sourceField] of Object.entries(this.mediaBundles)) {
-      for (const chunk of chunks(nodeUuids, CHUNK)) {
-        const params = {
-          ...filterIn('of', 'field_media_of.id', chunk),
-          'filter[use][condition][path]': 'field_media_use.field_external_uri.uri',
-          'filter[use][condition][value]': this.originalFileUse,
-          include: sourceField,
-          [`fields[media--${bundle}]`]: `name,field_media_of,${sourceField}`,
-          'fields[file--file]': 'filename,filemime',
-        };
-        tasks.push(async () => ({ bundle, sourceField, ...(await this.all(this.collectionUrl('media', bundle, params))) }));
-      }
-    }
-    const byNode = new Map();
-    for (const { bundle, sourceField, data, included } of await pool(tasks)) {
+    const parts = await Promise.all(Object.entries(this.mediaBundles).map(async ([bundle, sourceField]) => {
+      const { data, included } = await this.all(this.url('media', bundle, {
+        ...filterIn('of', 'field_media_of.id', nodeUuids),
+        'filter[use][condition][path]': 'field_media_use.field_external_uri.uri',
+        'filter[use][condition][value]': this.originalFileUse,
+        include: sourceField,
+        [`fields[media--${bundle}]`]: `name,field_media_of,${sourceField}`,
+        'fields[file--file]': 'filename,filemime',
+      }));
       const files = new Map(included.filter((r) => r.type === 'file--file').map((f) => [f.id, f]));
-      for (const media of data) {
-        const fileRef = media.relationships[sourceField]?.data;
-        const file = fileRef ? files.get(fileRef.id) : null;
+      return data.flatMap((media) => {
+        const file = files.get(media.relationships[sourceField]?.data?.id);
         const entry = {
           bundle,
           mediaId: media.attributes.drupal_internal__mid,
@@ -101,60 +119,23 @@ export class Repository {
           filename: file?.attributes.filename ?? null,
           mime: file?.attributes.filemime ?? null,
         };
-        for (const of of asArray(media.relationships.field_media_of?.data)) {
-          if (!byNode.has(of.id)) byNode.set(of.id, []);
-          byNode.get(of.id).push(entry);
-        }
-      }
-    }
-    return byNode;
+        return asArray(media.relationships.field_media_of?.data).map((of) => [of.id, entry]);
+      });
+    }));
+    return parts.flat();
   }
 
-  /**
-   * Every node below the given node UUIDs (via field_member_of), breadth
-   * first. Returns { nodes: [{uuid, nid, bundle, title, identifier, parents}], truncated }.
-   */
-  async descendants(rootUuids) {
-    const found = new Map();
-    let frontier = [...new Set(rootUuids)];
-    let truncated = false;
-    while (frontier.length && !truncated) {
-      const tasks = [];
-      for (const bundle of Object.keys(this.bundles)) {
-        for (const chunk of chunks(frontier, CHUNK)) {
-          tasks.push(() => this.all(this.collectionUrl('node', bundle, {
-            ...filterIn('parent', 'field_member_of.id', chunk),
-            [`fields[node--${bundle}]`]: 'title,field_identifier,drupal_internal__nid,field_member_of',
-          })));
-        }
-      }
-      const next = [];
-      for (const { data } of await pool(tasks)) {
-        for (const n of data) {
-          if (found.has(n.id)) continue;
-          found.set(n.id, {
-            uuid: n.id,
-            nid: n.attributes.drupal_internal__nid,
-            bundle: n.type.replace('node--', ''),
-            title: n.attributes.title,
-            identifier: n.attributes.field_identifier ?? '',
-            parents: asArray(n.relationships.field_member_of?.data).map((p) => p.id),
-          });
-          next.push(n.id);
-        }
-      }
-      if (found.size >= DESCENDANT_CAP) truncated = true;
-      frontier = next;
-    }
-    return { nodes: [...found.values()], truncated };
+  /** Direct children (via field_member_of) of the given node UUIDs (≤ CHUNK). */
+  async children(parentUuids) {
+    const fields = 'title,field_identifier,drupal_internal__nid,field_member_of,field_model';
+    const parts = await Promise.all(Object.keys(this.bundles).map((bundle) => this.all(this.url('node', bundle, {
+      ...filterIn('parent', 'field_member_of.id', parentUuids),
+      [`fields[node--${bundle}]`]: fields,
+      include: 'field_model',
+      'fields[taxonomy_term--islandora_models]': 'name',
+    }))));
+    return merge(parts);
   }
-}
-
-/** Entity-reference fields worth including (terms and parent nodes). */
-export function relationshipFields(fields) {
-  return Object.entries(fields)
-    .filter(([, f]) => f.targetType === 'taxonomy_term' || f.targetType === 'node')
-    .map(([name]) => name);
 }
 
 function filterIn(key, path, values) {
@@ -162,17 +143,17 @@ function filterIn(key, path, values) {
     [`filter[${key}][condition][path]`]: path,
     [`filter[${key}][condition][operator]`]: 'IN',
   };
-  // URLSearchParams can't hold repeated keys from an object; encode the
-  // array members with explicit indices instead.
+  // An object can't hold repeated keys; index the array members instead.
   values.forEach((v, i) => { p[`filter[${key}][condition][value][${i}]`] = v; });
   return p;
 }
 
-function merge(results) {
+/** Reduce step: merge { data, included } parts into nodes + a resource index. */
+export function merge(parts) {
   const index = new Map();
   const nodes = new Map();
-  for (const { data, included } of results) {
-    for (const r of included) index.set(`${r.type}:${r.id}`, r);
+  for (const { data, included } of parts) {
+    for (const r of included ?? []) index.set(`${r.type}:${r.id}`, r);
     for (const r of data) {
       nodes.set(r.id, r);
       index.set(`${r.type}:${r.id}`, r);
@@ -186,19 +167,8 @@ export function asArray(v) {
   return Array.isArray(v) ? v : [v];
 }
 
-function* chunks(list, size) {
-  for (let i = 0; i < list.length; i += size) yield list.slice(i, i + size);
-}
-
-async function pool(tasks, size = CONCURRENCY) {
-  const results = new Array(tasks.length);
-  let next = 0;
-  async function worker() {
-    while (next < tasks.length) {
-      const i = next++;
-      results[i] = await tasks[i]();
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(size, tasks.length) }, worker));
-  return results;
+export function chunks(list, size = CHUNK) {
+  const out = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
 }

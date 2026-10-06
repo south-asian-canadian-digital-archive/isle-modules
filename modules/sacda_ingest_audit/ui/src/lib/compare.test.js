@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { compareCell, planColumns, OK, INFO, WARN, ERROR } from './compare.js';
+import { compareCell, planColumns, suggestMapping, OK, INFO, WARN, ERROR } from './compare.js';
 
 const term = (name, extra = {}) => ({ display: name, term: { tid: 1, name, vocab: 'subject', uris: [], ...extra } });
 const col = (kind, role = 'field') => ({ name: 'x', role, kind });
@@ -53,6 +53,15 @@ describe('compareCell', () => {
     expect(compareCell('A', items, col('node', 'parent'), { multi: true }).status).toBe(ERROR);
   });
 
+  test('media is checked both ways', () => {
+    const fileCol = col('file', 'file');
+    const media = [{ display: 'a.jpg', filename: 'a.jpg' }];
+    expect(compareCell('a.jpg', [], fileCol, { multi: true }).status).toBe(ERROR);
+    expect(compareCell('', media, fileCol, { multi: true }).status).toBe(ERROR);
+    expect(compareCell('', [], fileCol, { multi: true }).status).toBe(OK);
+    expect(compareCell('a.jpg', [...media, { display: 'b.jpg', filename: 'b.jpg' }], fileCol, { multi: true }).status).toBe(ERROR);
+  });
+
   test('file matches on basename and tolerates Drupal collision renames', () => {
     expect(compareCell('2021_04/x/a.jpg', [{ display: 'a.jpg', filename: 'a.jpg' }], col('file', 'file'), { multi: true }).status).toBe(OK);
     expect(compareCell('a.jpg', [{ display: 'a_0.jpg', filename: 'a_0.jpg' }], col('file', 'file'), { multi: true }).status).toBe(OK);
@@ -69,11 +78,38 @@ describe('compareCell', () => {
   });
 });
 
+const bundles = { islandora_object: { fields: {
+  title: { type: 'string', label: 'Title' },
+  field_identifier: { type: 'string', label: 'Identifier' },
+  field_subject: { type: 'entity_reference', targetType: 'taxonomy_term', label: 'Subject' },
+} } };
+
 describe('planColumns', () => {
-  test('classifies Workbench columns', () => {
-    const bundles = { islandora_object: { fields: { title: { type: 'string', label: 'Title' }, field_subject: { type: 'entity_reference', targetType: 'taxonomy_term', label: 'Subject' } } } };
-    const plan = planColumns(['id', 'field_identifier', 'parent_id', 'title', 'field_subject', 'file', 'field_typo'], bundles, 'field_identifier');
+  test('classifies Workbench columns by suggestion', () => {
+    const plan = planColumns(['id', 'field_identifier', 'parent_id', 'title', 'field_subject', 'file', 'field_typo'], bundles);
     expect(plan.map((c) => c.role)).toEqual(['workbench', 'identifier', 'parent', 'field', 'field', 'file', 'unknown']);
     expect(plan[4].fuzzy).toBe(true);
+  });
+
+  test('explicit mapping renames columns onto fields', () => {
+    const plan = planColumns(['Object ID', 'Name', 'Scan'], bundles, { 'Object ID': 'field_identifier', Name: 'title', Scan: 'file' });
+    expect(plan.map((c) => [c.role, c.target])).toEqual([['identifier', 'field_identifier'], ['field', 'title'], ['file', 'file']]);
+  });
+
+  test('an unmapped column is not compared', () => {
+    expect(planColumns(['title'], bundles, { title: '' })[0].role).toBe('unknown');
+  });
+});
+
+describe('suggestMapping', () => {
+  test('matches labels and aliases, ignoring case and punctuation', () => {
+    expect(suggestMapping(['Identifier', 'TITLE', 'Parent ID', 'File name', 'Notes'], bundles)).toEqual({
+      Identifier: 'field_identifier', TITLE: 'title', 'Parent ID': 'parent_id', 'File name': 'file', Notes: '',
+    });
+  });
+
+  test('only one column gets the match key; Workbench id is the fallback', () => {
+    expect(suggestMapping(['identifier', 'field_identifier'], bundles)).toEqual({ identifier: 'field_identifier', field_identifier: '' });
+    expect(suggestMapping(['id', 'title'], bundles).id).toBe('field_identifier');
   });
 });
