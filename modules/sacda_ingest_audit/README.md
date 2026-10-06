@@ -22,12 +22,18 @@ choose the column, press **+ Add**, pick the field. Common aliases ("Object ID",
 name in the viewer's browser. If the mapping changes after a run, a banner
 offers to re-run instead of leaving stale results on screen.
 
-**Marking issues resolved.** Click a cell, then **Mark resolved** (or **Mark row
-resolved** for a missing or duplicated identifier). Resolved issues drop out of
-the filters, counts and CSV export; **Show resolved** brings them back, struck
-through. A mark covers that exact discrepancy only (identifier, column and both
-values), so if either side changes, the issue reappears. Marks live in the
-viewer's browser (localStorage).
+**Marking issues resolved.** Click a cell. If the same discrepancy (same
+column, same file value, same repository value) occurs in other rows, the
+panel offers **Mark all N identical resolved**, plus **Only this row**.
+Missing or duplicated identifiers use **Mark row resolved**. Resolved issues
+drop out of the filters, counts and CSV export; **Show resolved** brings them
+back struck through, and unresolving a group unresolves all of it.
+
+Marks are keyed on the column's header *and the field it is mapped to*, plus
+both values. So they survive a remap and re-run for every column whose mapping
+didn't change; a remapped column starts clean; and any mark disappears by
+itself once either value changes. Marks live in the viewer's browser
+(localStorage).
 
 ## What does not stop an audit
 

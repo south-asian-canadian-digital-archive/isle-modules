@@ -1,7 +1,7 @@
 <script>
   import CellDetail from './CellDetail.svelte';
 
-  let { result, bundles, nodeBase, showResolved = $bindable(false), ontogglecell, ontogglerow } = $props();
+  let { result, bundles, nodeBase, showResolved = $bindable(false), onresolve, onunresolve, ontogglerow, groupSize } = $props();
 
   // Virtual scrolling: rows have a fixed height, and only the ones in view
   // (plus OVERSCAN either side) are in the DOM; spacer rows stand in for the
@@ -209,7 +209,9 @@
 
 {#if selRow && selCol}
   <CellDetail row={selRow} column={selCol} {nodeBase} onclose={() => (selected = null)}
-    ontogglecell={() => ontogglecell(selRow, selCol.name, selRow.cells[selCol.name])}
+    groupSize={groupSize(selCol.name, selRow.cells[selCol.name])}
+    onresolve={(scope) => onresolve(selRow, selCol.name, selRow.cells[selCol.name], scope)}
+    onunresolve={() => onunresolve(selRow, selCol.name, selRow.cells[selCol.name])}
     ontogglerow={() => ontogglerow(selRow)} />
 {/if}
 

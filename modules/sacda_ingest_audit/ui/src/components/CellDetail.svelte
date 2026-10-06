@@ -1,5 +1,5 @@
 <script>
-  let { row, column, nodeBase, onclose, ontogglecell, ontogglerow } = $props();
+  let { row, column, nodeBase, onclose, onresolve, onunresolve, ontogglerow, groupSize = 1 } = $props();
 
   const LABEL = { ok: 'Matches', info: 'Only in the repository', warn: 'Differs — check it', error: 'Mismatch', skip: 'Not compared' };
   const cell = $derived(row.cells[column.name]);
@@ -23,7 +23,7 @@
         {#if column.label && column.role !== 'unknown'}<span class="muted">({column.label})</span>{/if}
       </div>
       <div class="status">
-        {#if cell.resolved}<span class="pill skip">✓ Marked resolved (was: {LABEL[cell.resolved]})</span>
+        {#if cell.resolved}<span class="pill skip">✓ Marked resolved{cell.resolvedBy === 'value' && groupSize > 1 ? ` with ${groupSize - 1} identical` : ''} (was: {LABEL[cell.resolved]})</span>
         {:else}<span class="pill {cell.status}">{LABEL[cell.status]}</span>{/if}
         {#if cell.note}<span>{cell.note}</span>{/if}
       </div>
@@ -31,8 +31,17 @@
     <div class="acts">
       {#if isRowIssue}
         <button class="btn secondary" onclick={ontogglerow}>{row.rowResolved ? 'Unresolve row' : 'Mark row resolved'}</button>
+      {:else if cell.resolved}
+        <button class="btn secondary" onclick={onunresolve}>
+          {cell.resolvedBy === 'value' && groupSize > 1 ? `Unresolve all ${groupSize}` : 'Unresolve'}
+        </button>
       {:else if cellIssue}
-        <button class="btn secondary" onclick={ontogglecell}>{cell.resolved ? 'Unresolve' : 'Mark resolved'}</button>
+        {#if groupSize > 1}
+          <button class="btn" onclick={() => onresolve('all')} title="Same column, same file value and same repository value">Mark all {groupSize} identical resolved</button>
+          <button class="btn secondary" onclick={() => onresolve('one')}>Only this row</button>
+        {:else}
+          <button class="btn secondary" onclick={() => onresolve('one')}>Mark resolved</button>
+        {/if}
       {/if}
       <button class="close" onclick={onclose} aria-label="Close details">×</button>
     </div>
@@ -70,10 +79,12 @@
     background: var(--ia-surface); border: 1px solid var(--ia-border); border-radius: 10px;
     box-shadow: 0 12px 32px rgb(0 0 0 / 0.18); padding: 1rem 1.25rem;
   }
-  header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
+  header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.75rem 1rem; align-items: flex-start; }
+  header > div:first-child { flex: 1 1 22rem; min-width: 0; }
+  .detail { hyphens: manual; }
   .where { font-size: 0.85rem; }
   .status { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.35rem; }
-  .acts { display: flex; gap: 0.5rem; align-items: center; flex: none; }
+  .acts { display: flex; gap: 0.5rem; align-items: center; flex: none; margin-left: auto; }
   .acts .btn { padding: 0.35em 0.8em; font-size: 0.85rem; }
   .close { font-size: 1.5rem; line-height: 1; background: none; border: 0; cursor: pointer; color: var(--ia-muted); }
   .notes { margin: 0.75rem 0 0; color: var(--ia-error); }

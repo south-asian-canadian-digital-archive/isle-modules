@@ -8,7 +8,7 @@
   import { suggestMapping, MATCH_KEY } from './lib/compare.js';
   import { audit } from './lib/worker.js';
   import { buildTable, guessHeaderRow } from './lib/table.js';
-  import { load as loadMarks, save as saveMarks, cellKey, rowKey, applyResolved } from './lib/resolved.js';
+  import { load as loadMarks, save as saveMarks, cellKey, rowKey, valueKey, colSpec, groupSizes, applyResolved } from './lib/resolved.js';
 
   let { settings } = $props();
 
@@ -38,14 +38,30 @@
   let showResolved = $state(false);
   const view = $derived(result ? applyResolved(result, marks) : null);
 
-  function toggle(key) {
+  // How many issues share each (column, file value, repository value).
+  const sizes = $derived(result ? groupSizes(result) : new Map());
+
+  function update(fn) {
     const next = new Set(marks);
-    if (next.has(key)) next.delete(key); else next.add(key);
+    fn(next);
     marks = next;
     saveMarks(next);
   }
-  const toggleCell = (row, column, cell) => toggle(cellKey(row, column, { sheet: cell.sheet, server: cell.server }));
-  const toggleRow = (row) => toggle(rowKey(row));
+  // scope 'all': this and every identical discrepancy; 'one': this row only.
+  // Marks are keyed on header + mapped field (see resolved.js).
+  const specOf = (name) => colSpec(result.columns.find((c) => c.name === name) ?? { name });
+  function resolveCell(row, name, cell, scope) {
+    const column = specOf(name);
+    const values = { sheet: cell.sheet, server: cell.server };
+    update((m) => m.add(scope === 'all' ? valueKey(column, values) : cellKey(row, column, values)));
+  }
+  function unresolveCell(row, name, cell) {
+    const column = specOf(name);
+    const values = { sheet: cell.sheet, server: cell.server };
+    update((m) => { m.delete(cellKey(row, column, values)); m.delete(valueKey(column, values)); });
+  }
+  const toggleRow = (row) => update((m) => { const k = rowKey(row); if (m.has(k)) m.delete(k); else m.add(k); });
+  const groupSize = (name, cell) => sizes.get(valueKey(specOf(name), { sheet: cell.sheet, server: cell.server })) ?? 1;
 
   // The result belongs to the mapping/options it was run with; say so when
   // they have changed since, instead of silently showing stale results.
@@ -213,7 +229,7 @@
     {/if}
     <Summary result={view} bundles={settings.bundles} ondownload={download} />
     <ResultsTable result={view} bundles={settings.bundles} nodeBase={settings.nodeBase}
-      bind:showResolved ontogglecell={toggleCell} ontogglerow={toggleRow} />
+      bind:showResolved onresolve={resolveCell} onunresolve={unresolveCell} ontogglerow={toggleRow} {groupSize} />
     {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} incomplete={view.extraIncomplete} nodeBase={settings.nodeBase} />{/if}
   {/if}
 </div>

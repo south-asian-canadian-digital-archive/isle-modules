@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { applyResolved, cellKey, rowKey } from './resolved.js';
+import { applyResolved, cellKey, rowKey, valueKey, groupSizes } from './resolved.js';
 
 const cell = (status, sheet = ['a'], server = ['b']) => ({ status, sheet, server, missing: [], extra: [], note: '' });
 const result = () => ({
   columns: [{ name: 'id', role: 'identifier' }, { name: 'title', role: 'field' }, { name: 'date', role: 'field' }],
+  // (no targets here, so colSpec(column) is just the header name)
   extra: [],
   rows: [
     { line: 2, identifier: 'x1', status: 'error', noteStatus: 'ok', notes: [], nodes: [{}], bundle: 'islandora_object',
@@ -35,6 +36,29 @@ describe('applyResolved', () => {
     const r = result();
     const marks = new Set([cellKey(r.rows[0], 'title', r.rows[0].cells.title)]);
     r.rows[0].cells.title = cell('error', ['a'], ['changed on server']);
+    expect(applyResolved(r, marks).rows[0].cells.title.resolved).toBeUndefined();
+  });
+
+  test('a value mark resolves every identical discrepancy, and only those', () => {
+    const r = result();
+    r.rows.push({ line: 4, identifier: 'x3', status: 'error', noteStatus: 'ok', notes: [], nodes: [{}], bundle: 'islandora_object',
+      cells: { id: cell('ok'), title: cell('error'), date: cell('warn', ['a'], ['other']) } });
+    expect(groupSizes(r).get(valueKey('title', r.rows[0].cells.title))).toBe(2);
+    const v = applyResolved(r, new Set([valueKey('title', r.rows[0].cells.title)]));
+    expect(v.rows[0].cells.title.resolvedBy).toBe('value');
+    expect(v.rows[2].cells.title.resolvedBy).toBe('value');
+    expect(v.resolvedCount).toBe(2);
+    // same file value but a different repository value is not "identical"
+    const w = applyResolved(r, new Set([valueKey('date', r.rows[0].cells.date)]));
+    expect(w.rows[2].cells.date.resolved).toBeUndefined();
+  });
+
+  test('marks follow the mapping: kept for an unchanged column, dropped for a remapped one', () => {
+    const r = result();
+    r.columns[1].target = 'title';
+    const marks = new Set([valueKey('title\u2192title', r.rows[0].cells.title)]);
+    expect(applyResolved(r, marks).rows[0].cells.title.resolved).toBe('error');
+    r.columns[1].target = 'field_alt_title'; // remapped, same header
     expect(applyResolved(r, marks).rows[0].cells.title.resolved).toBeUndefined();
   });
 
