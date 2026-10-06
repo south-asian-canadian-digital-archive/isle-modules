@@ -14,6 +14,21 @@
 
   const REMEMBER = 'sacdaIngestAudit.mapping';
 
+  // "Back to upload": shown once the spreadsheet card has scrolled out of view.
+  let uploadCard = $state();
+  let uploadVisible = $state(true);
+  $effect(() => {
+    if (!uploadCard) return;
+    const io = new IntersectionObserver(([e]) => { uploadVisible = e.isIntersecting; }, { rootMargin: '-80px 0px 0px 0px' });
+    io.observe(uploadCard);
+    return () => io.disconnect();
+  });
+  function toUpload() {
+    const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    uploadCard?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+    uploadCard?.querySelector('button, input, select')?.focus({ preventScroll: true });
+  }
+
   // Raw state: large plain data, replaced wholesale, never mutated in place.
   let source = $state.raw(null); // { name, sheetNames, matrices, notices }
   let sheet = $state('');
@@ -186,7 +201,7 @@
     and its original file. Nothing is changed in the repository.
   </p>
 
-  <section class="card">
+  <section class="card upload" bind:this={uploadCard}>
     <h2>1. Spreadsheet</h2>
     <SourcePicker sheetEndpoint={settings.sheetEndpoint} onloaded={loaded} />
 
@@ -279,10 +294,27 @@
       onundo={undoLast} {undoLabel} ondownload={download} />
     {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} incomplete={view.extraIncomplete} nodeBase={settings.nodeBase} />{/if}
   {/if}
+  {#if !uploadVisible}
+    <button class="to-upload" onclick={toUpload} title="Back to the spreadsheet upload" aria-label="Back to the spreadsheet upload">
+      <span aria-hidden="true">↑</span> Upload
+    </button>
+  {/if}
 </div>
 
 <style>
   .intro { max-width: 70ch; margin: 0 0 1rem; }
+  /* Toolbar clearance: Claro's sticky admin toolbar covers the top ~80px. */
+  .upload { scroll-margin-top: 6rem; }
+  .to-upload {
+    position: fixed; z-index: 450; left: 1rem; bottom: 1rem;
+    display: inline-flex; gap: 0.35rem; align-items: center;
+    font: inherit; font-size: 0.875rem; font-weight: 600; cursor: pointer;
+    padding: 0.5rem 0.9rem; border-radius: 999px;
+    color: var(--ia-accent); background: var(--ia-surface); border: 1px solid var(--ia-border);
+    box-shadow: 0 6px 18px rgb(0 0 0 / 0.15);
+  }
+  .to-upload:hover { border-color: var(--ia-accent); }
+  .to-upload:focus-visible { outline: 2px solid var(--ia-accent); outline-offset: 2px; }
   .loaded { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 0.75rem; }
   .options { display: flex; flex-wrap: wrap; gap: 0.75rem 1.5rem; align-items: center; }
   .options label { display: inline-flex; gap: 0.5rem; align-items: center; }
