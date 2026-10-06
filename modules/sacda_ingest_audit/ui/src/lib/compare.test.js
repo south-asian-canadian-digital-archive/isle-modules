@@ -15,6 +15,20 @@ describe('compareCell', () => {
     expect(compareCell('A | B', items, col('text'), { multi: false }).status).toBe(OK);
   });
 
+  test('whitespace-only differences are ignored everywhere', () => {
+    const t = (sheet, server) => compareCell(sheet, [{ display: server, text: server }], col('text')).status;
+    expect(t('Paldi,BC', 'Paldi, BC')).toBe(OK);
+    expect(t('Lashkar ,  Donie', 'Lashkar, Donie')).toBe(OK);
+    expect(t('Bonto\u200B Singh', 'Bonto Singh')).toBe(OK);
+    expect(t('Bonto\u00A0Singh', 'Bonto Singh')).toBe(OK);
+    expect(t('Bonto Singh', '<p>Bonto&nbsp;Singh</p>')).toBe(OK);
+    expect(t('Bonto Singh', 'Banto Singh')).toBe(ERROR);
+    const field = { targetBundles: ['person'] };
+    const item = { display: '', rel: 'relators:cre', term: { tid: 5, name: 'Singh, Gobind', uris: [] } };
+    expect(compareCell('relators: cre:person:Singh,Gobind', [item], col('typed'), { field, multi: true }).status).toBe(OK);
+    expect(compareCell('2021_04_SF1 ', [{ display: '', identifier: '2021_04_SF1', nid: 1 }], col('node', 'parent'), { multi: true }).status).toBe(OK);
+  });
+
   test('blank in file but set on server is informational', () => {
     expect(compareCell('', [{ display: 'x', text: 'x' }], col('text')).status).toBe(INFO);
   });
@@ -27,7 +41,7 @@ describe('compareCell', () => {
     const field = { targetBundles: ['subject'] };
     const r = compareCell('subject:Cafe|Buttons', [term('Café'), term('buttons')], col('term'), { field, multi: true });
     expect(r.status).toBe(OK);
-    expect(r.note).toMatch(/ignoring case/);
+    expect(r.note).toMatch(/ignoring whitespace, case/);
   });
 
   test('term mismatch is a warning, or an error in strict mode', () => {

@@ -84,7 +84,7 @@ reports as "not found".
 | `field_identifier` | match key | missing node or duplicates → **error** |
 | `parent_id` | parent node's `field_identifier` | **error** (wrong place in hierarchy) |
 | `file` | basename of the OriginalFile media's file; Drupal's `_0` collision rename tolerated | checked **both ways**: file named but no Original File media → **error**; file blank but media present → **error**; extra originals → **error** |
-| text / string / number / link / geolocation | normalised whitespace; case and accents relaxed as a fallback; 255-char truncation tolerated | **error** |
+| text / string / number / link / geolocation | whitespace ignored entirely ("Paldi,BC" = "Paldi, BC", including non-breaking/zero-width spaces and `&nbsp;`); case, accents and quote style relaxed as a fallback; 255-char truncation tolerated | **error** |
 | taxonomy refs, typed relations, EDTF, authority links | term ID, URI or name (`vocab:` prefix stripped); relator must agree | **warning** ("fuzzy", since Workbench reconciles these). *Strict* turns them into errors |
 | `id`, `media_use_tid`, … | Workbench options, not stored | not compared |
 | anything else | not a field on any content type | not compared, greyed header |

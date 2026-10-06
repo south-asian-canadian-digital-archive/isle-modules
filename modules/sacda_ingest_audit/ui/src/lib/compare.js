@@ -156,12 +156,16 @@ export function planColumns(headers, bundles, mapping = suggestMapping(headers, 
 // ---------------------------------------------------------------------------
 // Normalisation
 
+// Zero-width characters that sheets and pasted text carry invisibly.
+const ZERO_WIDTH = /[\u200B-\u200D\u2060\uFEFF]/g;
+const ENTITIES = { nbsp: ' ', amp: '&', quot: '"', apos: "'", '#39': "'", lt: '<', gt: '>' };
+
 export function norm(s) {
-  return String(s ?? '').normalize('NFC').replace(/\s+/g, ' ').trim();
+  return String(s ?? '').normalize('NFC').replace(ZERO_WIDTH, '').replace(/\s+/g, ' ').trim();
 }
 
 export function loose(s) {
-  return norm(String(s ?? '').replace(/<[^>]+>/g, ' '))
+  return norm(String(s ?? '').replace(/<[^>]+>/g, ' ').replace(/&(nbsp|amp|quot|apos|#39|lt|gt);/g, (_, e) => ENTITIES[e]))
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-')
     .toLowerCase();
@@ -272,9 +276,14 @@ function parseTypedToken(token, vocabs) {
 // ---------------------------------------------------------------------------
 // Matching: token vs server item → 'exact' | 'loose' | null
 
+/** Whitespace-blind: "Paldi,BC" and "Paldi, BC" are the same value. */
+export function compact(s) {
+  return loose(s).replace(/\s+/g, '');
+}
+
 function matchText(a, b) {
   if (norm(a) === norm(b)) return 'exact';
-  if (loose(a) === loose(b)) return 'loose';
+  if (loose(a) === loose(b) || compact(a) === compact(b)) return 'loose';
   return null;
 }
 
@@ -292,15 +301,15 @@ function matcher(kind, column, field) {
     case 'typed':
       return (t, item) => {
         const tok = parseTypedToken(t, vocabs);
-        if (tok.rel && tok.rel.toLowerCase() !== item.rel.toLowerCase()) return null;
+        if (tok.rel && compact(tok.rel) !== compact(item.rel)) return null;
         return matchTerm(tok.term, item.term);
       };
     case 'node':
       return (t, item) => {
-        if (column.role === 'parent') return norm(t) === norm(item.identifier) ? 'exact' : null;
-        const nid = t.match(/^(?:.*\/node\/)?(\d+)$/)?.[1];
+        if (column.role === 'parent') return compact(t) === compact(item.identifier) ? 'exact' : null;
+        const nid = norm(t).match(/^(?:.*\/node\/)?(\d+)$/)?.[1];
         if (nid && Number(nid) === item.nid) return 'exact';
-        return norm(t) === norm(item.identifier) ? 'exact' : null;
+        return compact(t) === compact(item.identifier) ? 'exact' : null;
       };
     case 'link':
     case 'authority':
@@ -322,7 +331,7 @@ function matcher(kind, column, field) {
       return (t, item) => {
         const want = basename(t);
         if (want === item.filename) return 'exact';
-        if (want.toLowerCase() === item.filename.toLowerCase()) return 'loose';
+        if (want.toLowerCase() === item.filename.toLowerCase() || compact(want) === compact(item.filename)) return 'loose';
         // Drupal renames on collision: photo.jpg → photo_0.jpg
         if (want.toLowerCase() === item.filename.toLowerCase().replace(/_\d+(\.[^.]+)$/, '$1')) return 'loose';
         return null;
@@ -387,7 +396,7 @@ export function compareCell(raw, items, column, { field, multi, delimiter = '|',
   result.extra = items.filter((_, j) => !used.has(j)).map((i) => i.display);
 
   if (!result.missing.length && !result.extra.length) {
-    if (normalised) result.note = 'Matches after ignoring case, accents or punctuation.';
+    if (normalised) result.note = 'Matches after ignoring whitespace, case, accents or quote style.';
     return result;
   }
   const fuzzy = FUZZY_KINDS.has(column.kind) && !strict;
