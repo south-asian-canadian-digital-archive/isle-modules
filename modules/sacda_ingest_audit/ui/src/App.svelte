@@ -291,7 +291,8 @@
     <Summary result={view} bundles={settings.bundles} ondownload={download} />
     <ResultsTable result={view} bundles={settings.bundles} nodeBase={settings.nodeBase}
       bind:showResolved onmark={markCell} onunmark={unmarkCell} onmarkrow={markRow} onmarkmany={markMany} {groupSize}
-      onundo={undoLast} {undoLabel} ondownload={download} />
+      onundo={undoLast} {undoLabel} ondownload={download}
+      fileName={source ? `${source.name}${source.sheetNames.length > 1 ? ` · ${sheet}` : ''}` : ''} />
     {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} incomplete={view.extraIncomplete} nodeBase={settings.nodeBase} />{/if}
   {/if}
   {#if !uploadVisible}

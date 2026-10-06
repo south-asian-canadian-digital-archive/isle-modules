@@ -4,7 +4,7 @@
   import { difference } from '../lib/resolved.js';
   import { differenceTypes } from '../lib/compare.js';
 
-  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize, onundo, undoLabel = '', ondownload } = $props();
+  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize, onundo, undoLabel = '', ondownload, fileName = '' } = $props();
 
   // Virtual scrolling: rows have a fixed height, and only the ones in view
   // (plus OVERSCAN either side) are in the DOM; spacer rows stand in for the
@@ -439,6 +439,7 @@
     <div class="done" role="status">
       <div class="done-head">
         <strong>Review complete</strong>
+        {#if fileName}<span class="file" title={fileName}>{fileName}</span>{/if}
         <span class="muted">{found.toLocaleString()} issue{found === 1 ? '' : 's'} found in {result.rows.length.toLocaleString()} rows · none left open</span>
       </div>
       <div class="done-stats">
@@ -716,6 +717,7 @@
   .done { border: 1px solid #b9e2c4; background: var(--ia-ok-bg); border-radius: 10px; padding: 0.9rem 1rem; margin-bottom: 0.9rem; display: flex; flex-direction: column; gap: 0.75rem; align-items: flex-start; }
   .done-head { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: baseline; }
   .done-head strong { color: var(--ia-ok); font-size: 1.05rem; }
+  .done-head .file { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; padding: 0.1em 0.5em; border-radius: 4px; background: var(--ia-surface); border: 1px solid #b9e2c4; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .done-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.6rem; width: 100%; }
   .stat { font: inherit; text-align: left; display: flex; gap: 0.7rem; align-items: center; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid var(--ia-border); background: var(--ia-surface); color: inherit; }
   button.stat { cursor: pointer; }
