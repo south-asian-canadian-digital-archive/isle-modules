@@ -1,5 +1,6 @@
 <script>
   import { untrack } from 'svelte';
+  import { typingIn } from '../lib/keys.js';
   let {
     row, column, nodeBase, onclose, onmark, onunmark, onmarkrow, groupSize = 1,
     position = null, onnext, onprev, autoAdvance = $bindable(true), onlyThisRow = $bindable(false),
@@ -98,7 +99,7 @@
   // Keyboard: N / → next, P / ← previous, R resolve, F mark as problem
   // (Shift = this row only), U undo, Esc close.
   function keydown(e) {
-    if (e.target.closest?.('input, select, textarea, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (typingIn(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (e.key === 'Escape') onclose();
     else if (k === 'n' || e.key === 'ArrowRight') onnext?.();

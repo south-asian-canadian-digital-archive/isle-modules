@@ -1,6 +1,7 @@
 <script>
   import { tick } from 'svelte';
   import CellDetail from './CellDetail.svelte';
+  import { typingIn } from '../lib/keys.js';
   import { difference } from '../lib/resolved.js';
   import { differenceTypes } from '../lib/compare.js';
 
@@ -248,11 +249,11 @@
 
   function bulkKeys(e) {
     if (menuCol && e.key === 'Escape') { menuCol = ''; e.preventDefault(); return; }
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !e.target.closest?.('input, select, textarea')) {
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !typingIn(e.target)) {
       if (undoLabel) { undo(); e.preventDefault(); }
       return;
     }
-    if (selected || !bulk.size || e.target.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (selected || !bulk.size || typingIn(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (k === 'r') bulkMark('resolved');
     else if (k === 'f') bulkMark('problem');
@@ -304,12 +305,14 @@
       if (filter === 'errors' && r.status !== 'error' && !kept) return false;
       if (filter === 'missing' && (r.nodes.length || r.lookupFailed || r.rowFlagged || (r.rowResolved && !showResolved))) return false;
       if (typeFilter && r.bundle !== typeFilter) return false;
-      if (kinds.length) {
+      // Marked-this-session rows also survive the chip and column-focus
+      // filters, so Previous can always get back to them.
+      if (kinds.length && !kept) {
         const names = focusColumn ? [focusColumn] : columns.map((c) => c.name);
         const rowLevel = (kinds.includes('problem') && r.rowFlagged) || (kinds.includes('resolved') && r.rowResolved);
         if (!rowLevel && !names.some((n) => r.cells[n] && kinds.includes(kindOf(r.cells[n])))) return false;
       }
-      else if (focusColumn && !['error', 'warn'].includes(r.cells[focusColumn]?.status)) return false;
+      else if (!kinds.length && focusColumn && !kept && !['error', 'warn'].includes(r.cells[focusColumn]?.status)) return false;
       if (q && !`${r.identifier} ${r.title}`.toLowerCase().includes(q)) return false;
       return true;
     });
