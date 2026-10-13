@@ -17,7 +17,7 @@ const BASE_FIELDS = ['title', MATCH_KEY, 'drupal_internal__nid', 'field_member_o
 /**
  * @param {{headers: string[], rows: object[]}} table
  * @param {object} settings drupalSettings.sacdaIngestAudit + { origin }
- * @param {{mapping: object, delimiter: string, strict: boolean, scanExtra: boolean}} options
+ * @param {{mapping: object, delimiter: string, strict: boolean, scanExtra: boolean, matchMonthStart?: boolean}} options
  * @param {(p: {stage: string, done: number, total: number, requests: number}) => void} onProgress
  */
 export async function runAudit(table, settings, options, onProgress = () => {}) {
@@ -283,7 +283,7 @@ function compareRow(row, ctx) {
     }
     const items = serverItems(node, col.target, col.kind, index, { files: files.get(node.id) });
     const multi = col.role === 'parent' || col.role === 'file' ? true : field ? field.cardinality !== 1 : false;
-    const cell = compareCell(raw, items, col, { field, multi, delimiter: options.delimiter, strict: options.strict });
+    const cell = compareCell(raw, items, col, { field, multi, delimiter: options.delimiter, strict: options.strict, matchMonthStart: options.matchMonthStart });
     cells[col.name] = cell;
     raise(cell.status === INFO ? OK : cell.status);
   }

@@ -112,7 +112,10 @@ export class Repository {
   async lookup(identifiers, need) {
     const sparse = {};
     for (const b of Object.keys(this.bundles)) sparse[`fields[node--${b}]`] = need.fields.join(',');
-    for (const v of need.vocabularies) sparse[`fields[taxonomy_term--${v}]`] = 'name,field_external_uri,field_authority_link';
+    for (const v of need.vocabularies) {
+      sparse[`fields[taxonomy_term--${v}]`] = 'name,field_external_uri,field_authority_link'
+        + (v === 'geo_location' ? ',field_geo_alt_name' : '');
+    }
     const parts = await Promise.all(Object.entries(this.bundles).map(([bundle, info]) => {
       const include = need.include.filter((f) => f in info.fields);
       const params = { ...filterIn('ident', 'field_identifier', identifiers), ...sparse };

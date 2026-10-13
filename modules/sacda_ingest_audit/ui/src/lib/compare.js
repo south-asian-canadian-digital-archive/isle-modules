@@ -217,6 +217,7 @@ export function serverItems(node, name, kind, index, extra = {}) {
         name: r?.attributes.name ?? '',
         vocab: ref.type.split('--')[1] ?? '',
         uris: termUris(r),
+        aliases: asArray(r?.attributes.field_geo_alt_name).filter(Boolean),
       };
       if (kind === 'typed') {
         const relType = ref.meta?.rel_type ?? '';
@@ -292,10 +293,74 @@ function matchText(a, b) {
 function matchTerm(tok, term) {
   if (tok.tid != null) return tok.tid === term.tid ? 'exact' : null;
   if (tok.uri) return term.uris.includes(tok.uri) ? 'exact' : null;
-  return matchText(tok.name, term.name);
+  const direct = matchText(tok.name, term.name);
+  if (!direct && term.vocab === 'language') {
+    return matchText(languageName(tok.name), languageName(term.name)) ? 'loose' : null;
+  }
+  if (direct || term.vocab !== 'geo_location') return direct;
+  for (const name of [term.name, ...(term.aliases ?? [])]) {
+    if (matchText(tok.name, name)) return 'loose';
+    if (matchGeographic(tok.name, name)) return 'loose';
+  }
+  return null;
 }
 
-function matcher(kind, column, field) {
+// Intl supplies ISO language names in both the browser and audit worker,
+// including two-letter, three-letter and bibliographic codes (en/eng, fr/fre).
+const LANGUAGE_NAMES = typeof Intl.DisplayNames === 'function'
+  ? new Intl.DisplayNames(['en'], { type: 'language', fallback: 'none' }) : null;
+
+function languageName(value) {
+  const code = loose(value);
+  if (!/^[a-z]{2,3}$/.test(code)) return value;
+  return LANGUAGE_NAMES?.of(code) ?? value;
+}
+
+function monthMatchesFirstDay(sheet, repository) {
+  const month = norm(sheet);
+  return /^\d{4}-(?:0[1-9]|1[0-2])$/.test(month) && norm(repository) === `${month}-01`;
+}
+
+// Legacy geographic exports use place_region shortcodes. Limit recognition
+// to known region codes and the geographic vocabulary, keeping explicit
+// region conflicts and unrelated names visible for review.
+const GEO_REGIONS = {
+  ab: 'alberta', bc: 'british columbia', mb: 'manitoba', nb: 'new brunswick',
+  nl: 'newfoundland and labrador', ns: 'nova scotia', nt: 'northwest territories',
+  nu: 'nunavut', on: 'ontario', pe: 'prince edward island', qc: 'quebec',
+  sk: 'saskatchewan', yt: 'yukon',
+};
+// This legacy code reconciled to Mackenzie during ingest. Do not strip
+// geographic feature words (such as Lake) from arbitrary place names.
+const GEO_LEGACY_NAMES = { 'mackenzie lake_bc': 'mackenzie' };
+
+function geographicName(value) {
+  const name = loose(value);
+  const code = name.match(/^(.+)_([a-z]{2})$/);
+  if (code && code[2] in GEO_REGIONS) {
+    return {
+      place: compact(GEO_LEGACY_NAMES[name] ?? code[1].replace(/_/g, ' ')),
+      region: code[2], shortcode: true,
+    };
+  }
+  // Repository labels can retain a province as a comma or parenthetical
+  // qualifier; it must agree with the code rather than be discarded.
+  const qualified = name.match(/^(.+?)(?:,\s*|\s*\()([^(),]+)\)?$/);
+  if (qualified) {
+    const region = Object.keys(GEO_REGIONS).find((r) => compact(qualified[2]).replace(/\./g, '') === r || compact(qualified[2]) === compact(GEO_REGIONS[r]));
+    if (region) return { place: compact(qualified[1]), region, shortcode: false };
+  }
+  return { place: compact(name), region: null, shortcode: false };
+}
+
+function matchGeographic(a, b) {
+  const x = geographicName(a);
+  const y = geographicName(b);
+  return (x.shortcode || y.shortcode) && x.place === y.place
+    && (!x.region || !y.region || x.region === y.region);
+}
+
+function matcher(kind, column, field, { matchMonthStart = false } = {}) {
   const vocabs = field?.targetBundles ?? [];
   switch (kind) {
     case 'term':
@@ -331,7 +396,8 @@ function matcher(kind, column, field) {
       return (t, item) => (Number(t) === Number(item.text) ? 'exact' : null);
     case 'edtf':
       // By meaning: "193-" (CA) and "193X?" (EDTF) are the same 1930s.
-      return (t, item) => matchText(t, item.text) ?? (sameDates(t, item.text) ? 'loose' : null);
+      return (t, item) => matchText(t, item.text)
+        ?? (sameDates(t, item.text) || (matchMonthStart && monthMatchesFirstDay(t, item.text)) ? 'loose' : null);
     case 'file':
       return (t, item) => {
         const want = basename(t);
@@ -415,7 +481,7 @@ export function differenceTypes(cell) {
  * Compare one cell. Returns
  * { status, sheet: [token], server: [display], missing: [token], extra: [display], note }.
  */
-export function compareCell(raw, items, column, { field, multi, delimiter = '|', strict = false } = {}) {
+export function compareCell(raw, items, column, { field, multi, delimiter = '|', strict = false, matchMonthStart = false } = {}) {
   const tokens = splitCell(raw, multi, delimiter);
   const result = { status: OK, sheet: tokens, server: items.map((i) => i.display), missing: [], extra: [], pairs: [], note: '' };
 
@@ -441,7 +507,7 @@ export function compareCell(raw, items, column, { field, multi, delimiter = '|',
     return result;
   }
 
-  const match = matcher(column.kind, column, field);
+  const match = matcher(column.kind, column, field, { matchMonthStart });
   const used = new Set();
   let normalised = false;
   const unmatched = [];
@@ -463,8 +529,14 @@ export function compareCell(raw, items, column, { field, multi, delimiter = '|',
   if (!result.missing.length && !result.extra.length) {
     if (normalised) {
       result.note = column.kind === 'edtf'
-        ? 'Same dates once both are read as EDTF (notation and ?/~ qualifiers ignored).'
-        : 'Matches after ignoring whitespace, case, accents or quote style.';
+        ? matchMonthStart && tokens.some((t) => items.some((i) => monthMatchesFirstDay(t, i.text)))
+          ? 'Matches with the month-only date setting: the repository adds day 01 to the same year and month.'
+          : 'Same dates once both are read as EDTF (notation and ?/~ qualifiers ignored).'
+        : items.some((i) => i.term?.vocab === 'geo_location')
+          ? 'Matches after recognizing geographic shortcodes, alternate names or text formatting.'
+          : items.some((i) => i.term?.vocab === 'language')
+            ? 'Matches after recognizing language codes or text formatting.'
+          : 'Matches after ignoring whitespace, case, accents or quote style.';
     }
     return result;
   }

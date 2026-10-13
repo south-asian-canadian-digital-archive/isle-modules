@@ -1,7 +1,7 @@
 import { describe, expect, test, afterEach } from 'bun:test';
 import { buildTable, guessHeaderRow } from './table.js';
 import { chunks } from './repository.js';
-import { runAudit } from './audit.js';
+import { runAudit, issuesCsv } from './audit.js';
 
 describe('buildTable never rejects a sheet over its headers', () => {
   test('duplicate headers get numbered copies and a notice', () => {
@@ -52,6 +52,54 @@ describe('runAudit survives failed requests', () => {
     mediaBundles: {}, bundles: { islandora_object: { label: 'Item', fields: { title: { type: 'string', label: 'Title', cardinality: 1 }, field_identifier: { type: 'string', label: 'Identifier', cardinality: 1 } } } },
   };
   const node = (id, title) => ({ type: 'node--islandora_object', id: `uuid-${id}`, attributes: { field_identifier: id, title, drupal_internal__nid: 1 }, relationships: {} });
+
+  test('date option reaches the audit comparison and removes only matching first-day issues', async () => {
+    const dateSettings = structuredClone(settings);
+    dateSettings.bundles.islandora_object.fields.field_edtf_date = { type: 'edtf', label: 'Date', cardinality: -1 };
+    globalThis.fetch = async () => {
+      const item = node('a', 'T');
+      item.attributes.field_edtf_date = ['2012-12-01'];
+      return new Response(JSON.stringify({ data: [item], links: {} }), { status: 200 });
+    };
+    const table = { headers: ['field_identifier', 'date'], rows: [
+      { __line: 2, field_identifier: 'a', date: '2012-12' },
+    ] };
+    const options = { mapping: { field_identifier: 'field_identifier', date: 'field_edtf_date' },
+      delimiter: '|', scanExtra: false };
+    const before = await runAudit(table, dateSettings, options);
+    expect(before.stats.columns.date.warn).toBe(1);
+    expect(issuesCsv(before)).toContain('2012-12-01');
+    const after = await runAudit(table, dateSettings, { ...options, matchMonthStart: true });
+    expect(after.stats.columns.date.ok).toBe(1);
+    expect(issuesCsv(after).split('\n')).toHaveLength(1);
+    const reset = await runAudit(table, dateSettings, { ...options, matchMonthStart: false });
+    expect(reset.stats.columns.date.warn).toBe(1);
+  });
+
+  test('audit requests geographic alternate names and removes recognized codes from issue counts', async () => {
+    const geoSettings = structuredClone(settings);
+    geoSettings.bundles.islandora_object.fields.field_geographic_subject = {
+      type: 'entity_reference', targetType: 'taxonomy_term', targetBundles: ['geo_location'],
+      label: 'Subject (Geographic)', cardinality: -1,
+    };
+    const ref = { type: 'taxonomy_term--geo_location', id: 'place', meta: { drupal_internal__target_id: 7 } };
+    globalThis.fetch = async (url) => {
+      expect(new URL(url).searchParams.get('fields[taxonomy_term--geo_location]')).toContain('field_geo_alt_name');
+      const item = node('a', 'T');
+      item.relationships.field_geographic_subject = { data: [ref] };
+      return new Response(JSON.stringify({ data: [item], included: [{ ...ref, attributes: {
+        name: 'Mackenzie', field_geo_alt_name: ['Legacy place name'],
+      } }], links: {} }), { status: 200 });
+    };
+    const table = { headers: ['field_identifier', 'subjectGeographic'], rows: [
+      { __line: 2, field_identifier: 'a', subjectGeographic: 'mackenzie lake_bc' },
+      { __line: 3, field_identifier: 'a', subjectGeographic: 'Legacy place name' },
+    ] };
+    const result = await runAudit(table, geoSettings, { mapping: {
+      field_identifier: 'field_identifier', subjectGeographic: 'field_geographic_subject',
+    }, delimiter: '|', scanExtra: false });
+    expect(result.stats.columns.subjectGeographic).toMatchObject({ ok: 2, warn: 0, error: 0 });
+  });
 
   test('a failing chunk marks its rows "not checked" and the rest still compare', async () => {
     const ids = Array.from({ length: 60 }, (_, i) => `id${String(i).padStart(2, '0')}`);

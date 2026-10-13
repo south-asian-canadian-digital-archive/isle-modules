@@ -58,6 +58,7 @@
   let mapping = $state({});
   let delimiter = $state('|');
   let strict = $state(false);
+  let matchMonthStart = $state(false);
   let scanExtra = $state(true);
 
   let running = $state(false);
@@ -145,7 +146,7 @@
 
   // The result belongs to the mapping/options it was run with; say so when
   // they have changed since, instead of silently showing stale results.
-  const runKey = $derived(JSON.stringify([mapping, delimiter, strict, scanExtra]));
+  const runKey = $derived(JSON.stringify([mapping, delimiter, strict, scanExtra, matchMonthStart]));
   let ranWith = $state('');
   const stale = $derived(!!result && !running && runKey !== ranWith);
 
@@ -191,7 +192,7 @@
     progress = { stage: 'Starting', done: 0, total: 0, requests: 0 };
     const key = runKey;
     try {
-      result = await audit(table, $state.snapshot(settings), { mapping: $state.snapshot(mapping), delimiter: delimiter || '|', strict, scanExtra },
+      result = await audit(table, $state.snapshot(settings), { mapping: $state.snapshot(mapping), delimiter: delimiter || '|', strict, scanExtra, matchMonthStart },
         (p) => { progress = p; });
       ranWith = key;
     }
@@ -277,6 +278,10 @@
           <input type="checkbox" bind:checked={strict} />
           Strict: treat term and date differences as errors
         </label>
+        <label class="check">
+          <input type="checkbox" bind:checked={matchMonthStart} />
+          Auto-match month-only dates when the repository adds day 01 (2012-12 = 2012-12-01)
+        </label>
       </div>
       <div class="actions">
         <button class="btn" onclick={run} disabled={running || !hasKey}>{running ? 'Auditing…' : result ? 'Run audit again' : 'Run audit'}</button>
@@ -296,7 +301,7 @@
     {#if stale}
       <div class="stale" role="status">
         The mapping or options changed since these results were produced.
-        <button class="btn" onclick={run}>Re-run with the new mapping</button>
+        <button class="btn" onclick={run}>Re-run with the new settings</button>
       </div>
     {/if}
     {#if view.failures?.length}

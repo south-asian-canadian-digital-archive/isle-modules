@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { compareCell, planColumns, suggestMapping, pairChanges, differenceTypes, OK, INFO, WARN, ERROR } from './compare.js';
+import { compareCell, serverItems, planColumns, suggestMapping, pairChanges, differenceTypes, OK, INFO, WARN, ERROR } from './compare.js';
 
 const term = (name, extra = {}) => ({ display: name, term: { tid: 1, name, vocab: 'subject', uris: [], ...extra } });
 const col = (kind, role = 'field') => ({ name: 'x', role, kind });
@@ -61,6 +61,91 @@ describe('compareCell', () => {
   test('term matches by authority URI', () => {
     const items = [term('Couples', { uris: ['https://id.loc.gov/authorities/subjects/sh96009430'] })];
     expect(compareCell('http://id.loc.gov/authorities/subjects/sh96009430', items, col('term'), { multi: true }).status).toBe(OK);
+  });
+
+  test('language codes match names in either direction', () => {
+    for (const [code, name] of [['en', 'English'], ['eng', 'English'], ['pa', 'Punjabi'],
+      ['pan', 'Punjabi'], ['fr', 'French'], ['fra', 'French'], ['fre', 'French'],
+      ['hin', 'Hindi'], ['urd', 'Urdu']]) {
+      const result = compareCell(code, [term(name, { vocab: 'language' })], col('term'), { strict: true });
+      expect(result.status).toBe(OK);
+      expect(result.note).toMatch(/language codes/);
+      expect(compareCell(name, [term(code, { vocab: 'language' })], col('term')).status).toBe(OK);
+    }
+    const field = { targetBundles: ['language'] };
+    expect(compareCell('language:eng|pan', [term('Punjabi', { vocab: 'language' }),
+      term('English', { vocab: 'language' })], col('term'), { field, multi: true }).status).toBe(OK);
+    expect(compareCell('en', [term('French', { vocab: 'language' })], col('term')).status).toBe(WARN);
+    expect(compareCell('zzz', [term('English', { vocab: 'language' })], col('term')).status).toBe(WARN);
+    expect(compareCell('eng', [term('English')], col('term')).status).toBe(WARN);
+    expect(compareCell('eng', [], col('term')).status).toBe(ERROR);
+  });
+
+  test('month-only dates match day 01 only when the setting is enabled', () => {
+    const date = (sheet, server, options = {}) => compareCell(sheet,
+      [{ display: server, text: server }], col('edtf'), options);
+    expect(date('2012-12', '2012-12-01').status).toBe(WARN);
+    const result = date('2012-12', '2012-12-01', { matchMonthStart: true, strict: true });
+    expect(result.status).toBe(OK);
+    expect(result.note).toMatch(/adds day 01/);
+    expect(result.missing).toEqual([]);
+    expect(result.extra).toEqual([]);
+    for (const [sheet, server] of [['2012-12', '2012-12-02'], ['2012-12', '2012-11-01'],
+      ['2012-12', '2013-12-01'], ['2012', '2012-01-01'], ['2012-12-01', '2012-12'],
+      ['2012-13', '2012-13-01'], ['2012-00', '2012-00-01']]) {
+      expect(date(sheet, server, { matchMonthStart: true }).status).toBe(WARN);
+    }
+    expect(date('193-', '193X?', { matchMonthStart: true }).status).toBe(OK);
+    const multi = compareCell('2012-12|2013-01', [
+      { display: '2013-01-02', text: '2013-01-02' }, { display: '2012-12-01', text: '2012-12-01' },
+    ], col('edtf'), { matchMonthStart: true, multi: true });
+    expect(multi.missing).toEqual(['2013-01']);
+    expect(multi.extra).toEqual(['2013-01-02']);
+  });
+
+  test('geographic shortcodes match names, including the legacy Mackenzie code', () => {
+    const geo = (name) => term(name, { vocab: 'geo_location' });
+    for (const [code, name] of [
+      ['mackenzie lake_bc', 'Mackenzie'], ['VANCOUVER_BC', 'Vancouver'],
+      ['new_westminster_bc', 'New Westminster'], ['toronto_on', 'Toronto'],
+      ['vancouver_bc', 'Vancouver (British Columbia)'], ['vancouver_bc', 'Vancouver, B.C.'],
+    ]) {
+      const result = compareCell(code, [geo(name)], col('term'), { strict: true });
+      expect(result.status).toBe(OK);
+      expect(result.missing).toEqual([]);
+      expect(result.extra).toEqual([]);
+      expect(result.note).toMatch(/geographic shortcodes/);
+    }
+  });
+
+  test('geographic normalization preserves actual place and region differences', () => {
+    const geo = (name) => term(name, { vocab: 'geo_location' });
+    for (const [code, name] of [
+      ['vancouver_bc', 'Victoria'], ['vancouver_bc', 'Vancouver, Ontario'],
+      ['vancouver_bc', 'vancouver_on'], ['vancouver_zz', 'Vancouver'],
+      ['mackenzie lake_on', 'Mackenzie'], ['christina lake_bc', 'Christina'],
+    ]) expect(compareCell(code, [geo(name)], col('term')).status).toBe(WARN);
+    expect(compareCell('vancouver_bc', [term('Vancouver')], col('term')).status).toBe(WARN);
+    expect(compareCell('mackenzie lake_bc', [], col('term')).status).toBe(ERROR);
+  });
+
+  test('geographic alternate names are read from JSON:API and recognized', () => {
+    const ref = { type: 'taxonomy_term--geo_location', id: 'place', meta: { drupal_internal__target_id: 7 } };
+    const resource = { attributes: { name: 'Mackenzie', field_geo_alt_name: ['Mackenzie Lake', 'Legacy place name'] } };
+    const items = serverItems({ relationships: { field_geographic_subject: { data: [ref] } } },
+      'field_geographic_subject', 'term', new Map([['taxonomy_term--geo_location:place', resource]]));
+    expect(compareCell('Legacy place name', items, col('term')).status).toBe(OK);
+    expect(compareCell('geo_location:Mackenzie Lake', items, col('term'), { field: { targetBundles: ['geo_location'] } }).status).toBe(OK);
+    expect(compareCell('7', items, col('term')).status).toBe(OK);
+  });
+
+  test('multi-valued geography matches as a set and retains remaining problems', () => {
+    const items = [term('Vancouver', { vocab: 'geo_location' }), term('Mackenzie', { vocab: 'geo_location' })];
+    expect(compareCell('mackenzie lake_bc|vancouver_bc', items, col('term'), { multi: true }).status).toBe(OK);
+    const result = compareCell('mackenzie lake_bc|victoria_bc', items, col('term'), { multi: true });
+    expect(result.status).toBe(WARN);
+    expect(result.missing).toEqual(['victoria_bc']);
+    expect(result.extra).toEqual(['Vancouver']);
   });
 
   test('typed relation must agree on relator and name', () => {
