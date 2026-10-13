@@ -116,6 +116,39 @@ Problems are repaired or isolated and reported, never fatal to the whole run:
 | file check / extra-node scan fails | affected file cells become warnings, the extra list is flagged incomplete |
 | very long identifiers | IN-filter chunks are sized by URL length, not just count |
 
+## AI triage (optional)
+
+When the site has an Anthropic API key, a row of AI controls appears above the
+results table. **AI triage** asks Claude for an opinion on every *distinct*
+difference still open (grouped exactly like review marks, so the same renamed
+subject on 40 rows is one question) and answers each with one of:
+
+- **same meaning**: nothing was lost (authorised name form, reconciled term,
+  same date in another notation, punctuation or spacing);
+- **real problem**: a value in the file is not in the repository, or differs;
+- **unsure**: cannot be told from the values; left for a person.
+
+Nothing is marked automatically. Suggestions show as an `AI` tag on the cell and
+a line in the detail panel; the chips filter the table to one verdict so you can
+check them, and two buttons accept every "same meaning" as resolved or every
+"real problem" as a problem in one step (Undo reverses it). The issues CSV gains
+`ai` and `ai_reason` columns. Suggestions are kept in this browser, so a re-run
+only asks about differences it has not seen.
+
+**What leaves the site:** for each distinct difference, the column name, mapped
+field and field type, the audit's note, and the values that did not match on
+each side. Not whole records, identifiers, titles or files. Check that against
+your data policy before turning it on for restricted material.
+
+**Turning it on:** set `ANTHROPIC_API_KEY` in `.env` (passed to the drupal
+container by `docker-compose.yml`) and recreate the container, or set
+`$settings['sacda_ingest_audit_anthropic_key']` in `settings.php`. No key, no
+controls. The model defaults to `claude-opus-5-5`; override with
+`$settings['sacda_ingest_audit_triage_model']`. The request is made by
+`IngestAuditController::triage()` with Drupal's HTTP client (40 differences per
+request, so each stays inside the proxy timeout); the prompt is a constant in
+that class.
+
 ## How it is built
 
 The custom code is deliberately thin. Repository data comes from **core

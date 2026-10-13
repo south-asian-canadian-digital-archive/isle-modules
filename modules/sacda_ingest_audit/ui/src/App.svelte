@@ -9,6 +9,7 @@
   import { suggestMapping, MATCH_KEY } from './lib/compare.js';
   import { audit } from './lib/worker.js';
   import { buildTable, guessHeaderRow } from './lib/table.js';
+  import { openDifferences, requestTriage, load as loadAi, save as saveAi } from './lib/triage.js';
   import { load as loadMarks, save as saveMarks, cellKey, rowKey, valueKey, colSpec, groupSizes, applyResolved } from './lib/resolved.js';
 
   let { settings } = $props();
@@ -144,6 +145,56 @@
   }
   const groupSize = (name, cell) => sizes.get(valueKey(specOf(name), cell)) ?? 1;
 
+  // AI triage (optional; hidden when the site has no API key): an opinion on
+  // each distinct open difference, kept per browser and keyed like the marks
+  // so it survives a re-run. Never applied without a click.
+  let ai = $state.raw(loadAi());
+  let triaging = $state(false);
+  let triageDone = $state(0);
+  let triageTotal = $state(0);
+  let triageError = $state('');
+  const openItems = $derived(view ? openDifferences(view) : []);
+  const aiOf = (name, cell) => ai.get(valueKey(specOf(name), cell)) ?? null;
+  const aiStats = $derived.by(() => {
+    const out = { pending: 0, same: 0, problem: 0, unsure: 0, cells: { same: 0, problem: 0, unsure: 0 } };
+    for (const item of openItems) {
+      const v = ai.get(item.id)?.verdict;
+      if (!v) out.pending++;
+      else { out[v]++; out.cells[v] += item.count; }
+    }
+    return out;
+  });
+  async function runTriage() {
+    const items = openItems.filter((i) => !ai.has(i.id));
+    if (!items.length || triaging) return;
+    triaging = true;
+    triageError = '';
+    triageDone = 0;
+    triageTotal = items.length;
+    try {
+      await requestTriage(settings.triageEndpoint, items, (results, done) => {
+        const next = new Map(ai);
+        for (const r of results) next.set(r.id, { verdict: r.verdict, reason: r.reason });
+        ai = next;
+        saveAi(next);
+        triageDone = done;
+      });
+    }
+    catch (e) { triageError = e.message; }
+    finally { triaging = false; }
+  }
+  // Accept every open suggestion of one verdict, as one undoable step.
+  function acceptAi(verdict) {
+    const kind = verdict === 'same' ? 'resolved' : 'problem';
+    const ids = openItems.filter((i) => ai.get(i.id)?.verdict === verdict).map((i) => i.id);
+    if (!ids.length) return;
+    update((sets) => { for (const id of ids) sets[kind].add(id); }, null, `accept ${ids.length} AI "${verdict === 'same' ? 'same meaning' : 'real problem'}"`);
+  }
+  const triage = $derived(settings.triageEndpoint ? {
+    running: triaging, done: triageDone, total: triageTotal, error: triageError, stats: aiStats,
+    run: runTriage, accept: acceptAi, of: aiOf,
+  } : null);
+
   // The result belongs to the mapping/options it was run with; say so when
   // they have changed since, instead of silently showing stale results.
   const runKey = $derived(JSON.stringify([mapping, delimiter, strict, scanExtra, matchMonthStart]));
@@ -205,7 +256,7 @@
   }
 
   function download() {
-    const blob = new Blob([issuesCsv(view)], { type: 'text/csv' });
+    const blob = new Blob([issuesCsv(view, triage ? aiOf : null)], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `ingest-audit-${(source?.name ?? 'sheet').replace(/\.[^.]+$/, '')}.csv`;
@@ -315,7 +366,7 @@
     <Summary result={view} bundles={settings.bundles} ondownload={download} />
     <ResultsTable result={view} bundles={settings.bundles} nodeBase={settings.nodeBase}
       bind:showResolved onmark={markCell} onunmark={unmarkCell} onmarkrow={markRow} onmarkmany={markMany} {groupSize}
-      onundo={undoLast} {undoLabel} ondownload={download} onreviewanother={reviewAnother}
+      {triage} onundo={undoLast} {undoLabel} ondownload={download} onreviewanother={reviewAnother}
       fileName={source ? `${source.name}${source.sheetNames.length > 1 ? ` · ${sheet}` : ''}` : ''} />
     {#if scanExtra}<ExtraNodes extra={view.extra} truncated={view.truncated} incomplete={view.extraIncomplete} nodeBase={settings.nodeBase} />{/if}
   {/if}

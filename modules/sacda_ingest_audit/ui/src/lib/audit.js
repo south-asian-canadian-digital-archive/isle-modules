@@ -345,8 +345,10 @@ export function summarise(rows, columns, extra) {
  * Resolved issues are left out entirely; issues marked as a problem are
  * included with review = "confirmed problem".
  */
-export function issuesCsv(result) {
-  const out = [['line', 'identifier', 'node', 'column', 'status', 'review', 'note', 'in_file', 'in_repository']];
+export function issuesCsv(result, aiOf = null) {
+  const out = [['line', 'identifier', 'node', 'column', 'status', 'review', 'note', 'in_file', 'in_repository', ...(aiOf ? ['ai', 'ai_reason'] : [])]];
+  // AI suggestion for a cell, when triage ran: two trailing columns.
+  const ai = (name, c) => { if (!aiOf) return []; const a = aiOf(name, c); return [a?.verdict ?? '', a?.reason ?? '']; };
   for (const r of result.rows) {
     const nid = r.nodes[0]?.nid ?? '';
     if (!r.nodes.length && !r.rowResolved) {
@@ -354,8 +356,8 @@ export function issuesCsv(result) {
     }
     for (const [name, c] of Object.entries(r.cells)) {
       if (!r.nodes.length || c.status === SKIP || c.resolved) continue;
-      if (c.flagged) out.push([r.line, r.identifier, nid, name, c.flagged, 'confirmed problem', c.note, c.sheet.join(' | '), c.server.join(' | ')]);
-      else if (c.status !== OK) out.push([r.line, r.identifier, nid, name, c.status, '', c.note, c.sheet.join(' | '), c.server.join(' | ')]);
+      if (c.flagged) out.push([r.line, r.identifier, nid, name, c.flagged, 'confirmed problem', c.note, c.sheet.join(' | '), c.server.join(' | '), ...ai(name, c)]);
+      else if (c.status !== OK) out.push([r.line, r.identifier, nid, name, c.status, '', c.note, c.sheet.join(' | '), c.server.join(' | '), ...ai(name, c)]);
     }
   }
   for (const n of result.extra) out.push(['', n.identifier, n.nid, '', 'extra', '', 'In the repository but not in the file', '', n.title]);

@@ -18,3 +18,16 @@ sacda_ingest_audit.sheet:
     _csrf_token: 'TRUE'
   options:
     no_cache: TRUE
+
+# Optional AI second opinion on the differences a reviewer still has open.
+# Server-side so the API key never reaches the browser; see triage().
+sacda_ingest_audit.triage:
+  path: '/admin/content/ingest-audit/triage'
+  defaults:
+    _controller: '\Drupal\sacda_ingest_audit\Controller\IngestAuditController::triage'
+  methods: [POST]
+  requirements:
+    _permission: 'use ingest audit'
+    _csrf_token: 'TRUE'
+  options:
+    no_cache: TRUE

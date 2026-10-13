@@ -4,8 +4,9 @@
   let {
     row, column, nodeBase, onclose, onmark, onunmark, onmarkrow, groupSize = 1,
     position = null, onnext, onprev, autoAdvance = $bindable(true), onlyThisRow = $bindable(false),
-    onundolast, undoLabel = '',
+    onundolast, undoLabel = '', ai = null,
   } = $props();
+  const AI_LABEL = { same: 'same meaning, nothing lost', problem: 'real problem', unsure: 'unsure' };
 
   const LABEL = { ok: 'Matches', info: 'Only in the repository', warn: 'Differs — check it', error: 'Mismatch', skip: 'Not compared' };
   const cell = $derived(row.cells[column.name]);
@@ -145,6 +146,10 @@
       {#if cell.note && !isRowIssue}<span>{cell.note}</span>{/if}
     </div>
 
+    {#if ai && !marked && !isRowIssue}
+      <p class="ai {ai.verdict}"><strong>AI suggests: {AI_LABEL[ai.verdict]}.</strong> {ai.reason}</p>
+    {/if}
+
     {#if row.notes.length && column.role === 'identifier'}
       <ul class="notes">{#each row.notes as n}<li>{n}</li>{/each}</ul>
     {/if}
@@ -211,6 +216,12 @@
   .body { flex: 1; min-height: 0; overflow: auto; padding: 0.7rem 1.1rem; }
   .status { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
   .pill.problem { background: #f3ecfb; color: #6b3fa0; }
+  .ai { margin: 0.5rem 0 0; padding: 0.35rem 0.6rem; border-radius: 6px; border-left: 3px solid var(--ia-border); background: rgb(0 0 0 / 0.04); font-size: 0.85rem; }
+  .ai.same { border-left-color: var(--ia-ok); }
+  .ai.problem { border-left-color: var(--ia-error); }
+  .ai.unsure { border-left-color: var(--ia-muted); }
+  .ai.same strong { color: var(--ia-ok); }
+  .ai.problem strong { color: var(--ia-error); }
   .notes { margin: 0.6rem 0 0; color: var(--ia-error); }
   .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.7rem; }
   h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ia-muted); margin: 0 0 0.35rem; display: flex; gap: 0.5rem; align-items: baseline; }

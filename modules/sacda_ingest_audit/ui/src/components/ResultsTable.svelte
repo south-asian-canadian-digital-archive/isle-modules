@@ -5,7 +5,12 @@
   import { difference } from '../lib/resolved.js';
   import { differenceTypes } from '../lib/compare.js';
 
-  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize, onundo, undoLabel = '', ondownload, onreviewanother, fileName = '' } = $props();
+  let { result, bundles, nodeBase, showResolved = $bindable(false), onmark, onunmark, onmarkrow, onmarkmany, groupSize, onundo, undoLabel = '', ondownload, onreviewanother, fileName = '', triage = null } = $props();
+
+  // AI triage: show only rows with an open cell the AI gave this verdict.
+  let aiFilter = $state('');
+  const AI_LABEL = { same: 'same meaning', problem: 'real problem', unsure: 'unsure' };
+  const aiFor = (name, cell) => (triage && ['error', 'warn'].includes(cell.status) ? triage.of(name, cell) : null);
 
   // Virtual scrolling: rows have a fixed height, and only the ones in view
   // (plus OVERSCAN either side) are in the DOM; spacer rows stand in for the
@@ -314,6 +319,7 @@
       }
       else if (!kinds.length && focusColumn && !kept && !['error', 'warn'].includes(r.cells[focusColumn]?.status)) return false;
       if (q && !`${r.identifier} ${r.title}`.toLowerCase().includes(q)) return false;
+      if (aiFilter && !kept && !columns.some((c) => r.cells[c.name] && aiFor(c.name, r.cells[c.name])?.verdict === aiFilter)) return false;
       return true;
     });
   });
@@ -438,6 +444,27 @@
     <span>Click a cell to compare values and mark it resolved.</span>
   </div>
 
+  {#if triage}
+    {@const st = triage.stats}
+    <div class="ai-bar" role="group" aria-label="AI triage">
+      <button class="btn secondary" disabled={triage.running || !st.pending} onclick={triage.run}
+        title="Sends each distinct open difference (column name and the values that did not match) to Anthropic's Claude for an opinion. Nothing is marked until you accept it.">
+        {triage.running ? `Asking AI… ${triage.done}/${triage.total}` : st.pending ? `AI triage ${st.pending.toLocaleString()} open difference${st.pending === 1 ? '' : 's'}` : 'AI triage: nothing new to ask'}
+      </button>
+      {#each ['same', 'problem', 'unsure'] as v}
+        {#if st[v]}
+          <button class="ai-chip {v}" class:on={aiFilter === v} aria-pressed={aiFilter === v} onclick={() => (aiFilter = aiFilter === v ? '' : v)}
+            title="Show only rows the AI judged “{AI_LABEL[v]}”">
+            AI: {AI_LABEL[v]} <span class="n">{st.cells[v].toLocaleString()}</span>
+          </button>
+        {/if}
+      {/each}
+      {#if st.same}<button class="btn secondary" onclick={() => { triage.accept('same'); aiFilter = ''; }}>✓ Resolve {st.cells.same.toLocaleString()} “same meaning”</button>{/if}
+      {#if st.problem}<button class="btn secondary" onclick={() => { triage.accept('problem'); aiFilter = ''; }}>⚑ Mark {st.cells.problem.toLocaleString()} “real problem”</button>{/if}
+      {#if triage.error}<span class="ai-error" role="alert">{triage.error}</span>{/if}
+    </div>
+  {/if}
+
   {#if !openIssues && reviewed}
     <div class="done" role="status">
       <div class="done-head">
@@ -537,18 +564,20 @@
               <td class="c-type"><span class="type">{row.bundle ? (bundles[row.bundle]?.label ?? row.bundle) : '—'}</span></td>
               {#each columns as col (col.name)}
                 {@const cell = row.cells[col.name]}
+                {@const hint = aiFor(col.name, cell)}
                 <td data-cell="{row.line}|{col.name}" class="c {cell.status}" class:focused={focusColumn === col.name}
                   class:bulk={bulk.has(`${row.line}|${col.name}`)} class:resolved={cell.resolved && showResolved}
                   class:flagged={cell.flagged && kinds.includes('problem')}
-                  class:dim={kinds.length && !kinds.includes(kindOf(cell))}>
+                  class:dim={(kinds.length && !kinds.includes(kindOf(cell))) || (aiFilter && hint?.verdict !== aiFilter)}>
                   <button class="cell-btn" class:selected={selected?.line === row.line && selected?.column === col.name}
-                    title="{cell.resolved ? 'Marked resolved' : STATUS_LABEL[cell.status]}{cell.note ? ` — ${cell.note}` : ''}"
+                    title="{cell.resolved ? 'Marked resolved' : STATUS_LABEL[cell.status]}{cell.note ? ` — ${cell.note}` : ''}{hint ? ` — AI: ${AI_LABEL[hint.verdict]}. ${hint.reason}` : ''}"
                     onclick={(e) => cellClick(e, row, col.name)}>
                     {#if cell.flagged && kinds.includes('problem')}<span class="glyph" aria-hidden="true">⚑</span>
                     {:else if cell.resolved && showResolved}<span class="glyph" aria-hidden="true">✓</span>
                     {:else if GLYPH[cell.status]}<span class="glyph" aria-hidden="true">{GLYPH[cell.status]}</span>{/if}
                     <span class="sr">{cell.resolved ? 'Marked resolved' : STATUS_LABEL[cell.status]}:</span>
                     <span class="val" class:from-server={!cell.sheet.length && cell.server.length}>{text(cell)}</span>
+                    {#if hint}<span class="ai-tag {hint.verdict}" aria-hidden="true">AI</span>{/if}
                   </button>
                 </td>
               {/each}
@@ -605,7 +634,7 @@
 {/if}
 
 {#if selRow && selCol}
-  <CellDetail row={selRow} column={selCol} {nodeBase} onclose={() => (selected = null)}
+  <CellDetail row={selRow} column={selCol} {nodeBase} ai={aiFor(selCol.name, selRow.cells[selCol.name])} onclose={() => (selected = null)}
     groupSize={groupSize(selCol.name, selRow.cells[selCol.name])}
     onmark={markAndAdvance} onmarkrow={markRowAndAdvance} {position} onnext={next} onprev={prev} bind:autoAdvance bind:onlyThisRow
     onundolast={undo} {undoLabel}
@@ -623,6 +652,16 @@
   .check { display: inline-flex; gap: 0.4rem; align-items: center; }
   .focus { margin: 0 0 0.5rem; }
   .link { font: inherit; background: none; border: 0; color: var(--ia-accent); text-decoration: underline; cursor: pointer; padding: 0; }
+  .ai-bar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; margin-bottom: 0.6rem; font-size: 0.85rem; }
+  .ai-chip { font: inherit; cursor: pointer; padding: 0.2rem 0.6rem; border-radius: 999px; border: 1px solid var(--ia-border); background: var(--ia-surface); color: inherit; }
+  .ai-chip .n { font-weight: 700; margin-left: 0.25rem; }
+  .ai-chip.on { border-color: var(--ia-accent); box-shadow: 0 0 0 1px var(--ia-accent); }
+  .ai-chip:focus-visible { outline: 2px solid var(--ia-accent); outline-offset: 2px; }
+  .ai-chip.same, .ai-tag.same { color: var(--ia-ok); }
+  .ai-chip.problem, .ai-tag.problem { color: var(--ia-error); }
+  .ai-chip.unsure, .ai-tag.unsure { color: var(--ia-muted); }
+  .ai-tag { flex: none; margin-left: auto; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.03em; padding: 0 0.3rem; border-radius: 3px; border: 1px solid currentColor; background: var(--ia-surface); }
+  .ai-error { color: var(--ia-error); }
   .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.8rem; margin-bottom: 0.6rem; align-items: center; }
   .sw { font: inherit; padding: 0.15em 0.55em; border-radius: 4px; border: 1px solid transparent; cursor: pointer; }
   .sw .n { font-variant-numeric: tabular-nums; opacity: 0.7; margin-left: 0.15em; }
