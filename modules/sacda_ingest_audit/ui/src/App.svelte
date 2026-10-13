@@ -164,25 +164,34 @@
     }
     return out;
   });
+  // Queue the open differences, then wait for the agent to answer them.
+  let triageWaiting = $state(0);
+  let stopTriage = false;
   async function runTriage() {
     const items = openItems.filter((i) => !ai.has(i.id));
     if (!items.length || triaging) return;
     triaging = true;
+    stopTriage = false;
     triageError = '';
     triageDone = 0;
     triageTotal = items.length;
+    triageWaiting = items.length;
     try {
-      await requestTriage(settings.triageEndpoint, items, (results, done) => {
-        const next = new Map(ai);
-        for (const r of results) next.set(r.id, { verdict: r.verdict, reason: r.reason });
-        ai = next;
-        saveAi(next);
-        triageDone = done;
-      });
+      await requestTriage(settings.triageEndpoint, items, (results, waiting) => {
+        if (results.length) {
+          const next = new Map(ai);
+          for (const r of results) next.set(r.id, { verdict: r.verdict, reason: r.reason });
+          ai = next;
+          saveAi(next);
+        }
+        triageWaiting = waiting;
+        triageDone = items.length - waiting;
+      }, { stopped: () => stopTriage });
     }
     catch (e) { triageError = e.message; }
     finally { triaging = false; }
   }
+  function cancelTriage() { stopTriage = true; }
   // Accept every open suggestion of one verdict, as one undoable step.
   function acceptAi(verdict) {
     const kind = verdict === 'same' ? 'resolved' : 'problem';
@@ -191,8 +200,8 @@
     update((sets) => { for (const id of ids) sets[kind].add(id); }, null, `accept ${ids.length} AI "${verdict === 'same' ? 'same meaning' : 'real problem'}"`);
   }
   const triage = $derived(settings.triageEndpoint ? {
-    running: triaging, done: triageDone, total: triageTotal, error: triageError, stats: aiStats,
-    run: runTriage, accept: acceptAi, of: aiOf,
+    running: triaging, done: triageDone, total: triageTotal, waiting: triageWaiting, error: triageError, stats: aiStats,
+    run: runTriage, cancel: cancelTriage, accept: acceptAi, of: aiOf,
   } : null);
 
   // The result belongs to the mapping/options it was run with; say so when

@@ -2,15 +2,17 @@
 //
 // Only distinct differences are sent (grouped exactly like review marks, see
 // resolved.js), and only the values that did not match, so a column with the
-// same renamed subject on 40 rows is one question. The server holds the API
-// key and does the asking; nothing is applied here. Suggestions are advice the
-// reviewer accepts or ignores.
+// same renamed subject on 40 rows is one question. The site only queues them:
+// an AI agent on someone's own machine pulls the queue and posts verdicts
+// back, and this page polls for them. Nothing is applied here; suggestions
+// are advice the reviewer accepts or ignores.
 import { OK, INFO, SKIP } from './compare.js';
 import { colSpec, valueKey } from './resolved.js';
 
 const STORE = 'sacdaIngestAudit.ai';
 const CAP = 5000;
-export const CHUNK = 40;
+export const CHUNK = 500;
+export const POLL_MS = 5000;
 export const VERDICTS = { same: 'same meaning', problem: 'real problem', unsure: 'unsure' };
 
 const isOpen = (cell) => cell.status !== OK && cell.status !== SKIP && cell.status !== INFO;
@@ -55,34 +57,41 @@ export function save(map) {
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+async function post(endpoint, body, fetchFn) {
+  let response;
+  try {
+    response = await fetchFn(endpoint, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+  catch { throw new Error('The site could not be reached. Check your connection and try again.'); }
+  const json = await response.json().catch(() => null);
+  if (response.ok && Array.isArray(json?.results)) return json;
+  throw new Error(json?.error ?? (response.status === 403 ? 'Your session has expired. Reload the page and try again.' : `AI triage failed (${response.status}).`));
+}
+
 /**
- * Ask for an opinion on each item, a chunk at a time. `onChunk(results, done)`
- * fires after every chunk so suggestions appear as they arrive. Throws with a
- * readable message if a chunk fails; what arrived before it is kept.
+ * Queue the items, then poll until every one has a verdict or `stopped()`
+ * says to give up. `onUpdate(results, waiting)` fires after every round, so
+ * verdicts appear as the agent posts them. Throws with a readable message.
  */
-export async function requestTriage(endpoint, items, onChunk, { fetchFn = fetch, pause = wait } = {}) {
-  let done = 0;
-  for (let i = 0; i < items.length; i += CHUNK) {
-    const chunk = items.slice(i, i + CHUNK);
-    let body;
-    for (let attempt = 0; ; attempt++) {
-      let response;
-      try {
-        response = await fetchFn(endpoint, {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ items: chunk }),
-        });
-      }
-      catch { throw new Error('The site could not be reached. Check your connection and try again.'); }
-      body = await response.json().catch(() => null);
-      if (response.ok && Array.isArray(body?.results)) break;
-      // 503: the AI service is busy. Anything else will not fix itself.
-      if (response.status === 503 && attempt < 2) { await pause(2000 * (attempt + 1)); continue; }
-      throw new Error(body?.error ?? (response.status === 403 ? 'Your session has expired. Reload the page and try again.' : `AI triage failed (${response.status}).`));
-    }
-    done += chunk.length;
-    onChunk(body.results.filter((r) => r.verdict in VERDICTS), done);
+export async function requestTriage(endpoint, items, onUpdate, { fetchFn = fetch, pause = wait, stopped = () => false } = {}) {
+  let open = new Set(items.map((i) => i.id));
+  const round = async (bodies) => {
+    const got = [];
+    for (const body of bodies) got.push(...(await post(endpoint, body, fetchFn)).results);
+    const results = got.filter((r) => r.verdict in VERDICTS && open.has(r.id));
+    for (const r of results) open.delete(r.id);
+    onUpdate(results, open.size);
+  };
+  const chunks = (list, wrap) => Array.from({ length: Math.ceil(list.length / CHUNK) }, (_, i) => wrap(list.slice(i * CHUNK, (i + 1) * CHUNK)));
+  await round(chunks(items, (c) => ({ items: c })));
+  while (open.size && !stopped()) {
+    await pause(POLL_MS);
+    if (stopped()) break;
+    await round(chunks([...open], (c) => ({ ids: c })));
   }
 }

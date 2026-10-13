@@ -19,8 +19,8 @@ sacda_ingest_audit.sheet:
   options:
     no_cache: TRUE
 
-# Optional AI second opinion on the differences a reviewer still has open.
-# Server-side so the API key never reaches the browser; see triage().
+# AI triage queue (see triage() / queue()). The browser posts open
+# differences here; an agent on someone's machine answers them via the queue.
 sacda_ingest_audit.triage:
   path: '/admin/content/ingest-audit/triage'
   defaults:
@@ -29,5 +29,17 @@ sacda_ingest_audit.triage:
   requirements:
     _permission: 'use ingest audit'
     _csrf_token: 'TRUE'
+  options:
+    no_cache: TRUE
+
+# Agent side of the triage queue. No Drupal login: the controller checks the
+# X-Triage-Token header against the state value, and 403s when it is unset.
+sacda_ingest_audit.triage_queue:
+  path: '/ingest-audit/triage-queue'
+  defaults:
+    _controller: '\Drupal\sacda_ingest_audit\Controller\IngestAuditController::queue'
+  methods: [GET, POST]
+  requirements:
+    _access: 'TRUE'
   options:
     no_cache: TRUE

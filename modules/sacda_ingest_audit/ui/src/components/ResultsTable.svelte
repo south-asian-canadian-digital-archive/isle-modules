@@ -447,10 +447,15 @@
   {#if triage}
     {@const st = triage.stats}
     <div class="ai-bar" role="group" aria-label="AI triage">
-      <button class="btn secondary" disabled={triage.running || !st.pending} onclick={triage.run}
-        title="Sends each distinct open difference (column name and the values that did not match) to Anthropic's Claude for an opinion. Nothing is marked until you accept it.">
-        {triage.running ? `Asking AI… ${triage.done}/${triage.total}` : st.pending ? `AI triage ${st.pending.toLocaleString()} open difference${st.pending === 1 ? '' : 's'}` : 'AI triage: nothing new to ask'}
-      </button>
+      {#if triage.running}
+        <span class="ai-wait" role="status">Waiting for the triage agent… {triage.done.toLocaleString()} of {triage.total.toLocaleString()} answered</span>
+        <button class="btn secondary" onclick={triage.cancel}>Stop waiting</button>
+      {:else}
+        <button class="btn secondary" disabled={!st.pending} onclick={triage.run}
+          title="Queues each distinct open difference (column name and the values that did not match) on this site for an AI agent to judge. Nothing is marked until you accept it.">
+          {st.pending ? `Send ${st.pending.toLocaleString()} open difference${st.pending === 1 ? '' : 's'} for AI triage` : 'AI triage: nothing new to ask'}
+        </button>
+      {/if}
       {#each ['same', 'problem', 'unsure'] as v}
         {#if st[v]}
           <button class="ai-chip {v}" class:on={aiFilter === v} aria-pressed={aiFilter === v} onclick={() => (aiFilter = aiFilter === v ? '' : v)}
@@ -662,6 +667,7 @@
   .ai-chip.unsure, .ai-tag.unsure { color: var(--ia-muted); }
   .ai-tag { flex: none; margin-left: auto; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.03em; padding: 0 0.3rem; border-radius: 3px; border: 1px solid currentColor; background: var(--ia-surface); }
   .ai-error { color: var(--ia-error); }
+  .ai-wait { color: var(--ia-muted); }
   .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.8rem; margin-bottom: 0.6rem; align-items: center; }
   .sw { font: inherit; padding: 0.15em 0.55em; border-radius: 4px; border: 1px solid transparent; cursor: pointer; }
   .sw .n { font-variant-numeric: tabular-nums; opacity: 0.7; margin-left: 0.15em; }

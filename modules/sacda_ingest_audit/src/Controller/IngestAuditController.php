@@ -7,7 +7,8 @@ namespace Drupal\sacda_ingest_audit\Controller;
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Access\CsrfTokenGenerator;
 use Drupal\Core\Entity\EntityFieldManagerInterface;
-use Drupal\Core\Site\Settings;
+use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
+use Drupal\Core\State\StateInterface;
 use Drupal\Core\Url;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\GuzzleException;
@@ -24,9 +25,11 @@ use Symfony\Component\HttpFoundation\Response;
  * entity access. All this class adds is the field schema the app needs to
  * decide how to compare a column, which JSON:API does not expose.
  *
- * The one exception is triage(): an optional AI second opinion on the
- * differences the reviewer still has open. It lives here because the API key
- * must stay on the server.
+ * The one exception is triage: a small queue that lets an AI agent running
+ * on someone's own machine give a second opinion on the differences a
+ * reviewer still has open. The browser posts the open differences, the agent
+ * pulls them with a shared token and posts verdicts back, the browser shows
+ * them. The site itself calls no external service.
  */
 class IngestAuditController extends ControllerBase {
 
@@ -36,16 +39,19 @@ class IngestAuditController extends ControllerBase {
   protected const ORIGINAL_FILE_USE = 'http://pcdm.org/use#OriginalFile';
 
   /**
-   * Triage limits: differences per request, and characters per value.
-   *
-   * The browser sends distinct differences in chunks, so one request stays
-   * well inside the proxy timeout in front of the site.
+   * Triage queue: key-value collection, state key for the agent token, and
+   * limits on what one request may carry.
    */
-  protected const TRIAGE_MAX_ITEMS = 40;
+  protected const TRIAGE_STORE = 'sacda_ingest_audit_triage';
+  protected const TRIAGE_TOKEN = 'sacda_ingest_audit.triage_token';
+  protected const TRIAGE_MAX_ITEMS = 2000;
   protected const TRIAGE_MAX_CHARS = 600;
-  protected const TRIAGE_MODEL = 'claude-opus-5-5';
+  protected const VERDICTS = ['same', 'problem', 'unsure'];
 
-  protected const TRIAGE_PROMPT = <<<'PROMPT'
+  /**
+   * Instructions handed to the agent with every batch of work.
+   */
+  protected const TRIAGE_GUIDANCE = <<<'GUIDANCE'
 You are helping an archivist review an ingest audit for a digital archive (Islandora / Drupal). A metadata spreadsheet was ingested by Islandora Workbench; the audit compared each spreadsheet cell with what the repository now holds and listed the differences. Each item you receive is one distinct difference in one column: the values that are in the file but not in the repository ("in_file_only"), and the values that are in the repository but not in the file ("in_repository_only"). Values both sides agree on are not shown. "rows" is how many rows share that exact difference.
 
 Decide for each item whether the ingest lost or changed information:
@@ -57,12 +63,16 @@ Decide for each item whether the ingest lost or changed information:
 A value that is only in the file and has nothing similar on the repository side is a "problem", however plausible the value is. Two different people who share a surname are a "problem", not "same". Do not judge whether the cataloguing itself is good; judge only whether file and repository agree.
 
 Give a reason of at most 20 words that names the specific values, written for the archivist.
-PROMPT;
+
+Answer by POSTing {"results": [{"key": ..., "verdict": "same"|"problem"|"unsure", "reason": ...}]} to the same URL, with the same X-Triage-Token header.
+GUIDANCE;
 
   public function __construct(
     protected EntityFieldManagerInterface $fieldManager,
     protected ClientInterface $httpClient,
     protected CsrfTokenGenerator $csrfToken,
+    protected KeyValueFactoryInterface $triageKeyValue,
+    protected StateInterface $triageState,
   ) {}
 
   public static function create(ContainerInterface $container): static {
@@ -70,6 +80,8 @@ PROMPT;
       $container->get('entity_field.manager'),
       $container->get('http_client'),
       $container->get('csrf_token'),
+      $container->get('keyvalue'),
+      $container->get('state'),
     );
   }
 
@@ -96,8 +108,8 @@ PROMPT;
             'bundles' => $this->nodeBundles(),
             'mediaBundles' => $this->mediaSourceFields(),
             'originalFileUse' => self::ORIGINAL_FILE_USE,
-            // NULL when no API key is configured: the app hides the feature.
-            'triageEndpoint' => $this->triageKey() === '' ? NULL : Url::fromRoute('sacda_ingest_audit.triage', [], [
+            // NULL until an agent token is set: the app hides the feature.
+            'triageEndpoint' => $this->agentToken() === '' ? NULL : Url::fromRoute('sacda_ingest_audit.triage', [], [
               'query' => ['token' => $this->csrfToken->get('admin/content/ingest-audit/triage')],
             ])->toString(),
           ],
@@ -146,32 +158,36 @@ PROMPT;
   }
 
   /**
-   * POST {items: [...]} → an AI opinion on each distinct difference.
+   * Browser side. POST {items: [...]} queues open differences for the agent;
+   * POST {ids: [...]} only asks. Either way the answer is the verdicts known
+   * so far for those ids, plus how many are still waiting.
    *
-   * Only what the browser sends leaves the site: column name, field type, the
-   * audit's note and the unmatched values on each side. Nothing is read from
-   * the repository here and nothing is changed; the reviewer accepts or
-   * ignores each suggestion in the app.
+   * Verdicts are shared: a difference another reviewer already had judged is
+   * answered at once.
    */
   public function triage(Request $request): JsonResponse {
-    $key = $this->triageKey();
-    if ($key === '') {
-      return new JsonResponse(['error' => 'AI triage is not set up on this site (no API key).'], 503);
+    if ($this->agentToken() === '') {
+      return new JsonResponse(['error' => 'AI triage is not set up on this site.'], 503);
     }
     $body = json_decode((string) $request->getContent(), TRUE);
-    $items = is_array($body) && is_array($body['items'] ?? NULL) ? array_values($body['items']) : [];
-    if (!$items || count($items) > self::TRIAGE_MAX_ITEMS) {
+    $items = is_array($body['items'] ?? NULL) ? array_values($body['items']) : [];
+    $ids = is_array($body['ids'] ?? NULL) ? array_values($body['ids']) : array_map(fn ($i) => $i['id'] ?? NULL, $items);
+    $ids = array_values(array_filter($ids, 'is_string'));
+    if (!$ids || count($ids) > self::TRIAGE_MAX_ITEMS) {
       return new JsonResponse(['error' => 'Send between 1 and ' . self::TRIAGE_MAX_ITEMS . ' differences per request.'], 400);
     }
 
-    // Number the items ourselves: the model answers by number, so a
-    // client-chosen id can never be confused with content.
-    $ids = [];
-    $payload = [];
-    foreach ($items as $i => $item) {
-      $ids[$i + 1] = (string) ($item['id'] ?? $i);
-      $payload[] = [
-        'n' => $i + 1,
+    $store = $this->triageKeyValue->get(self::TRIAGE_STORE);
+    $keys = array_combine($ids, array_map(fn ($id) => hash('sha256', $id), $ids));
+    $known = $store->getMultiple(array_values($keys));
+    $new = [];
+    foreach ($items as $item) {
+      $id = $item['id'] ?? NULL;
+      if (!is_string($id) || isset($known[$keys[$id]])) {
+        continue;
+      }
+      $new[$keys[$id]] = [
+        'id' => $id,
         'column' => $this->clip($item['column'] ?? ''),
         'field' => $this->clip($item['field'] ?? ''),
         'field_type' => $this->clip($item['type'] ?? ''),
@@ -179,119 +195,90 @@ PROMPT;
         'in_file_only' => $this->clipAll($item['missing'] ?? []),
         'in_repository_only' => $this->clipAll($item['extra'] ?? []),
         'rows' => max(1, (int) ($item['count'] ?? 1)),
+        'queued' => time(),
       ];
     }
-
-    $model = (string) Settings::get('sacda_ingest_audit_triage_model', self::TRIAGE_MODEL);
-    $json = [
-      'model' => $model,
-      'max_tokens' => 16000,
-      'system' => self::TRIAGE_PROMPT,
-      'messages' => [[
-        'role' => 'user',
-        'content' => "Differences to judge, as JSON. Answer every item once, by its \"n\".\n\n" . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
-      ]],
-      'output_config' => [
-        'effort' => 'low',
-        'format' => [
-          'type' => 'json_schema',
-          'schema' => [
-            'type' => 'object',
-            'properties' => [
-              'results' => [
-                'type' => 'array',
-                'items' => [
-                  'type' => 'object',
-                  'properties' => [
-                    'n' => ['type' => 'integer'],
-                    'verdict' => ['type' => 'string', 'enum' => ['same', 'problem', 'unsure']],
-                    'reason' => ['type' => 'string'],
-                  ],
-                  'required' => ['n', 'verdict', 'reason'],
-                  'additionalProperties' => FALSE,
-                ],
-              ],
-            ],
-            'required' => ['results'],
-            'additionalProperties' => FALSE,
-          ],
-        ],
-      ],
-    ];
-    $headers = ['x-api-key' => $key, 'anthropic-version' => '2023-06-01'];
-    // A safety-classifier decline is retried on another model server-side.
-    // Haiku has no server-side fallback and must not be sent the parameter.
-    if (!str_contains($model, 'haiku')) {
-      $json['fallbacks'] = 'default';
-      $headers['anthropic-beta'] = 'server-side-fallback-2026-07-01';
+    if ($new) {
+      $store->setMultiple($new);
+      $known += $new;
     }
 
-    try {
-      $response = $this->httpClient->request('POST', 'https://api.anthropic.com/v1/messages', [
-        'headers' => $headers,
-        'json' => $json,
-        'timeout' => 85,
-        'connect_timeout' => 10,
-        'http_errors' => FALSE,
-      ]);
-    }
-    catch (GuzzleException $e) {
-      $this->getLogger('sacda_ingest_audit')->warning('AI triage request failed: @m', ['@m' => $e->getMessage()]);
-      return new JsonResponse(['error' => 'The AI service could not be reached from the server.'], 502);
-    }
-
-    $status = $response->getStatusCode();
-    $message = json_decode((string) $response->getBody(), TRUE);
-    if ($status !== 200 || !is_array($message)) {
-      $this->getLogger('sacda_ingest_audit')->warning('AI triage: HTTP @s @t', [
-        '@s' => $status,
-        '@t' => is_array($message) ? ($message['error']['message'] ?? '') : '',
-      ]);
-      // 429 and 529 are worth retrying; the app backs off on 503.
-      $retry = in_array($status, [429, 500, 502, 503, 529], TRUE);
-      return new JsonResponse([
-        'error' => match (TRUE) {
-          $status === 401, $status === 403 => 'The AI service rejected the site\'s API key.',
-          $retry => 'The AI service is busy. Try again in a moment.',
-          default => 'The AI service returned an error (' . $status . ').',
-        },
-      ], $retry ? 503 : 502);
-    }
-    if (($message['stop_reason'] ?? '') !== 'end_turn') {
-      return new JsonResponse(['error' => 'The AI service did not finish its answer (' . ($message['stop_reason'] ?? 'unknown') . ').'], 502);
-    }
-
-    $text = '';
-    foreach ($message['content'] ?? [] as $block) {
-      if (($block['type'] ?? '') === 'text') {
-        $text .= $block['text'];
-      }
-    }
-    $parsed = json_decode($text, TRUE);
     $results = [];
-    foreach (is_array($parsed) ? ($parsed['results'] ?? []) : [] as $r) {
-      $n = (int) ($r['n'] ?? 0);
-      if (isset($ids[$n]) && in_array($r['verdict'] ?? '', ['same', 'problem', 'unsure'], TRUE)) {
-        $results[$ids[$n]] = ['id' => $ids[$n], 'verdict' => $r['verdict'], 'reason' => mb_substr((string) ($r['reason'] ?? ''), 0, 300)];
+    $pending = 0;
+    foreach ($keys as $id => $key) {
+      $entry = $known[$key] ?? NULL;
+      if (isset($entry['verdict'])) {
+        $results[] = ['id' => $id, 'verdict' => $entry['verdict'], 'reason' => $entry['reason']];
+      }
+      elseif ($entry) {
+        $pending++;
       }
     }
-    return new JsonResponse(['model' => $message['model'] ?? $model, 'results' => array_values($results)], 200, ['Cache-Control' => 'no-store']);
+    return new JsonResponse(['results' => $results, 'pending' => $pending], 200, ['Cache-Control' => 'no-store']);
   }
 
   /**
-   * The Anthropic API key, or '' when triage is not configured.
+   * Agent side, authenticated by the X-Triage-Token header.
    *
-   * $settings['sacda_ingest_audit_anthropic_key'] wins; otherwise the
-   * container's ANTHROPIC_API_KEY, read the way the image's settings.php
-   * reads its own env (php-fpm does not pass the environment through).
+   * GET → {instructions, items: [{key, column, ..., in_file_only,
+   * in_repository_only, rows}]}, the differences still waiting (?limit=N,
+   * default 100). POST {results: [{key, verdict, reason}]} → stores verdicts.
    */
-  protected function triageKey(): string {
-    $key = (string) Settings::get('sacda_ingest_audit_anthropic_key', '');
-    if ($key === '') {
-      $file = '/var/run/s6/container_environment/ANTHROPIC_API_KEY';
-      $key = is_readable($file) ? (string) file_get_contents($file) : (string) getenv('ANTHROPIC_API_KEY');
+  public function queue(Request $request): JsonResponse {
+    $token = $this->agentToken();
+    if ($token === '' || !hash_equals($token, (string) $request->headers->get('X-Triage-Token', ''))) {
+      return new JsonResponse(['error' => 'Missing or wrong X-Triage-Token.'], 403);
     }
-    return trim($key);
+    $store = $this->triageKeyValue->get(self::TRIAGE_STORE);
+
+    if ($request->isMethod('POST')) {
+      $body = json_decode((string) $request->getContent(), TRUE);
+      $saved = 0;
+      $rejected = [];
+      foreach (is_array($body['results'] ?? NULL) ? $body['results'] : [] as $r) {
+        $key = is_string($r['key'] ?? NULL) ? $r['key'] : '';
+        $entry = $key !== '' ? $store->get($key) : NULL;
+        if (!$entry || !in_array($r['verdict'] ?? '', self::VERDICTS, TRUE)) {
+          $rejected[] = $key;
+          continue;
+        }
+        $entry['verdict'] = $r['verdict'];
+        $entry['reason'] = mb_substr(is_string($r['reason'] ?? NULL) ? $r['reason'] : '', 0, 300);
+        $entry['answered'] = time();
+        $store->set($key, $entry);
+        $saved++;
+      }
+      return new JsonResponse(['saved' => $saved, 'rejected' => $rejected], 200, ['Cache-Control' => 'no-store']);
+    }
+
+    $limit = max(1, min(500, (int) $request->query->get('limit', 100)));
+    $items = [];
+    $waiting = 0;
+    foreach ($store->getAll() as $key => $entry) {
+      if (isset($entry['verdict'])) {
+        continue;
+      }
+      $waiting++;
+      if (count($items) < $limit) {
+        $item = ['key' => $key] + $entry;
+        unset($item['id'], $item['queued']);
+        $items[] = $item;
+      }
+    }
+    return new JsonResponse([
+      'instructions' => self::TRIAGE_GUIDANCE,
+      'waiting' => $waiting,
+      'items' => $items,
+    ], 200, ['Cache-Control' => 'no-store']);
+  }
+
+  /**
+   * The shared secret the agent sends, or '' when triage is off.
+   *
+   * Set with: drush sset sacda_ingest_audit.triage_token <something>
+   */
+  protected function agentToken(): string {
+    return trim((string) $this->triageState->get(self::TRIAGE_TOKEN, ''));
   }
 
   protected function clip(mixed $value): string {

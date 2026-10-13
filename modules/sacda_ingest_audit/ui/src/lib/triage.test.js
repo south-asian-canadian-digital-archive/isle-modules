@@ -28,25 +28,37 @@ test('marked differences are not sent', () => {
   expect(openDifferences(applyResolved(r, marks)).map((i) => i.column)).toEqual(['date']);
 });
 
-test('chunks requests, retries a busy service, reports progress', async () => {
+test('queues, then polls only the open ids until all are answered', async () => {
   const items = Array.from({ length: CHUNK + 3 }, (_, i) => ({ id: `k${i}` }));
-  const calls = [];
-  let busy = true;
+  const bodies = [];
+  let round = 0;
   const fetchFn = async (url, init) => {
-    const sent = JSON.parse(init.body).items;
-    calls.push(sent.length);
-    if (busy) { busy = false; return { ok: false, status: 503, json: async () => ({ error: 'busy' }) }; }
-    return { ok: true, status: 200, json: async () => ({ results: sent.map((s) => ({ id: s.id, verdict: 'same', reason: 'r' })).concat({ id: 'x', verdict: 'bogus' }) }) };
+    const body = JSON.parse(init.body);
+    bodies.push(body);
+    const ids = body.items ? body.items.map((i) => i.id) : body.ids;
+    // Queueing answers nothing; the first poll answers its first chunk only;
+    // the next poll answers the rest.
+    round++;
+    const answer = body.items || round === 4 ? [] : ids;
+    return { ok: true, status: 200, json: async () => ({ results: answer.map((id) => ({ id, verdict: 'same', reason: 'r' })).concat({ id: 'x', verdict: 'bogus' }), pending: 0 }) };
   };
-  const progress = [];
+  const waiting = [];
   let got = 0;
-  await requestTriage('/t', items, (results, done) => { got += results.length; progress.push(done); }, { fetchFn, pause: async () => {} });
-  expect(calls).toEqual([CHUNK, CHUNK, 3]);
-  expect(progress).toEqual([CHUNK, CHUNK + 3]);
+  await requestTriage('/t', items, (results, open) => { got += results.length; waiting.push(open); }, { fetchFn, pause: async () => {} });
+  expect(bodies.map((b) => (b.items ? `items:${b.items.length}` : `ids:${b.ids.length}`))).toEqual([`items:${CHUNK}`, 'items:3', `ids:${CHUNK}`, 'ids:3', 'ids:3']);
+  expect(waiting).toEqual([CHUNK + 3, 3, 0]);
   expect(got).toBe(CHUNK + 3);
 });
 
+test('stops polling when asked', async () => {
+  let calls = 0;
+  const fetchFn = async () => { calls++; return { ok: true, status: 200, json: async () => ({ results: [], pending: 1 }) }; };
+  let n = 0;
+  await requestTriage('/t', [{ id: 'a' }], () => {}, { fetchFn, pause: async () => {}, stopped: () => ++n > 3 });
+  expect(calls).toBe(2);
+});
+
 test('a hard failure surfaces the server message', async () => {
-  const fetchFn = async () => ({ ok: false, status: 502, json: async () => ({ error: 'The AI service rejected the site\'s API key.' }) });
-  await expect(requestTriage('/t', [{ id: 'a' }], () => {}, { fetchFn })).rejects.toThrow('API key');
+  const fetchFn = async () => ({ ok: false, status: 503, json: async () => ({ error: 'AI triage is not set up on this site.' }) });
+  await expect(requestTriage('/t', [{ id: 'a' }], () => {}, { fetchFn })).rejects.toThrow('not set up');
 });

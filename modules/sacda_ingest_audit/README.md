@@ -118,36 +118,47 @@ Problems are repaired or isolated and reported, never fatal to the whole run:
 
 ## AI triage (optional)
 
-When the site has an Anthropic API key, a row of AI controls appears above the
-results table. **AI triage** asks Claude for an opinion on every *distinct*
-difference still open (grouped exactly like review marks, so the same renamed
-subject on 40 rows is one question) and answers each with one of:
+An AI agent running on someone's own machine (Claude Code, or any script) can
+give a second opinion on the differences a reviewer still has open. The site
+calls no external service: it only keeps a small queue.
 
-- **same meaning**: nothing was lost (authorised name form, reconciled term,
-  same date in another notation, punctuation or spacing);
-- **real problem**: a value in the file is not in the repository, or differs;
-- **unsure**: cannot be told from the values; left for a person.
+1. In the app, **Send N open differences for AI triage** queues every *distinct*
+   open difference (grouped exactly like review marks, so the same renamed
+   subject on 40 rows is one item) and waits.
+2. The agent pulls the queue, judges each item, and posts verdicts back:
+   **same** (nothing lost: authorised name form, reconciled term, same date in
+   another notation), **problem** (a value in the file is missing or differs), or
+   **unsure** (left for a person), each with a one-line reason.
+3. The page picks the verdicts up every few seconds. Nothing is marked
+   automatically: each judged cell gets an `AI` tag and a line in the detail
+   panel, chips filter the table to one verdict, and two buttons accept every
+   "same" as resolved or every "problem" as a problem (Undo reverses it). The
+   issues CSV gains `ai` and `ai_reason` columns.
 
-Nothing is marked automatically. Suggestions show as an `AI` tag on the cell and
-a line in the detail panel; the chips filter the table to one verdict so you can
-check them, and two buttons accept every "same meaning" as resolved or every
-"real problem" as a problem in one step (Undo reverses it). The issues CSV gains
-`ai` and `ai_reason` columns. Suggestions are kept in this browser, so a re-run
-only asks about differences it has not seen.
+Verdicts are stored on the site (key-value collection
+`sacda_ingest_audit_triage`), so the same difference is answered at once for
+the next reviewer and is never asked twice.
 
-**What leaves the site:** for each distinct difference, the column name, mapped
-field and field type, the audit's note, and the values that did not match on
-each side. Not whole records, identifiers, titles or files. Check that against
-your data policy before turning it on for restricted material.
+**Turning it on** (no token, no controls):
 
-**Turning it on:** set `ANTHROPIC_API_KEY` in `.env` (passed to the drupal
-container by `docker-compose.yml`) and recreate the container, or set
-`$settings['sacda_ingest_audit_anthropic_key']` in `settings.php`. No key, no
-controls. The model defaults to `claude-opus-5-5`; override with
-`$settings['sacda_ingest_audit_triage_model']`. The request is made by
-`IngestAuditController::triage()` with Drupal's HTTP client (40 differences per
-request, so each stays inside the proxy timeout); the prompt is a constant in
-that class.
+```bash
+drush sset sacda_ingest_audit.triage_token <a-secret>
+```
+
+**The agent's side** (no Drupal login; the token is the only credential):
+
+```bash
+# Work waiting, with the judging instructions (?limit=N, default 100):
+curl -H 'X-Triage-Token: <a-secret>' https://SITE/ingest-audit/triage-queue
+# Answer, using each item's "key":
+curl -H 'X-Triage-Token: <a-secret>' -H 'Content-Type: application/json' \
+  -d '{"results":[{"key":"…","verdict":"same","reason":"Authorised form of the same name."}]}' \
+  https://SITE/ingest-audit/triage-queue
+```
+
+**What the queue holds:** for each distinct difference, the column name, mapped
+field and field type, the audit's note, the values that did not match on each
+side, and a row count. Not identifiers, titles, whole records or files.
 
 ## How it is built
 
