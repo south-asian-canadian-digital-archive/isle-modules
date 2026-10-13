@@ -139,22 +139,23 @@ Verdicts are stored on the site (key-value collection
 `sacda_ingest_audit_triage`), so the same difference is answered at once for
 the next reviewer and is never asked twice.
 
-**Turning it on** (no token, no controls):
+**Agent sessions (the normal way in):** the **AI agent** card at the top of the
+page has **Start agent session**, which mints a temporary token (8 hours, or
+until **End session**) and **Copy agent prompt**, which copies complete
+instructions for the agent: the endpoint, the token, and the judging rules.
+With that token the agent can also upload a spreadsheet to the open page
+(`"action": "upload"`, file base64-encoded, optional mapping/delimiter
+overrides); the page audits it as if it had been dropped in, queues the open
+differences and reports progress, which the agent reads with
+`"action": "status"` (stats, per-column mapping and counts, state). An agent
+can therefore audit and triage a whole folder of sheets while you watch.
 
-```bash
-drush sset sacda_ingest_audit.triage_token <a-secret>
-```
+All agent calls are POSTs to `/ingest-audit/triage-queue` with the token in the
+JSON body: production's load balancer strips custom headers. The exact
+request shapes are in the copied prompt (`ui/src/lib/agent.js`).
 
-**The agent's side** (no Drupal login; the token is the only credential):
-
-```bash
-# Work waiting, with the judging instructions (?limit=N, default 100):
-curl -H 'X-Triage-Token: <a-secret>' https://SITE/ingest-audit/triage-queue
-# Answer, using each item's "key":
-curl -H 'X-Triage-Token: <a-secret>' -H 'Content-Type: application/json' \
-  -d '{"results":[{"key":"…","verdict":"same","reason":"Authorised form of the same name."}]}' \
-  https://SITE/ingest-audit/triage-queue
-```
+An optional permanent token for unattended agents (queue only, no uploads):
+`drush sset sacda_ingest_audit.triage_token <a-secret>`.
 
 **What the queue holds:** for each distinct difference, the column name, mapped
 field and field type, the audit's note, the values that did not match on each

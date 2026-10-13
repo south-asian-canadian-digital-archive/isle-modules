@@ -7,6 +7,7 @@ namespace Drupal\sacda_ingest_audit\Controller;
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Access\CsrfTokenGenerator;
 use Drupal\Core\Entity\EntityFieldManagerInterface;
+use Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface;
 use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
 use Drupal\Core\State\StateInterface;
 use Drupal\Core\Url;
@@ -49,6 +50,14 @@ class IngestAuditController extends ControllerBase {
   protected const VERDICTS = ['same', 'problem', 'unsure'];
 
   /**
+   * Agent sessions: a temporary token minted by an open audit page, valid
+   * for the queue and for handing that page spreadsheets to audit.
+   */
+  protected const SESSION_STORE = 'sacda_ingest_audit_agent';
+  protected const SESSION_TTL = 8 * 3600;
+  protected const UPLOAD_MAX_BYTES = 15 * 1024 * 1024;
+
+  /**
    * Instructions handed to the agent with every batch of work.
    */
   protected const TRIAGE_GUIDANCE = <<<'GUIDANCE'
@@ -64,7 +73,7 @@ A value that is only in the file and has nothing similar on the repository side 
 
 Give a reason of at most 20 words that names the specific values, written for the archivist.
 
-Answer by POSTing {"results": [{"key": ..., "verdict": "same"|"problem"|"unsure", "reason": ...}]} to the same URL, with the same X-Triage-Token header.
+Answer by POSTing {"token": ..., "results": [{"key": ..., "verdict": "same"|"problem"|"unsure", "reason": ...}]} to the same URL.
 GUIDANCE;
 
   public function __construct(
@@ -73,6 +82,7 @@ GUIDANCE;
     protected CsrfTokenGenerator $csrfToken,
     protected KeyValueFactoryInterface $triageKeyValue,
     protected StateInterface $triageState,
+    protected KeyValueExpirableFactoryInterface $agentSessions,
   ) {}
 
   public static function create(ContainerInterface $container): static {
@@ -82,6 +92,7 @@ GUIDANCE;
       $container->get('csrf_token'),
       $container->get('keyvalue'),
       $container->get('state'),
+      $container->get('keyvalue.expirable'),
     );
   }
 
@@ -108,8 +119,11 @@ GUIDANCE;
             'bundles' => $this->nodeBundles(),
             'mediaBundles' => $this->mediaSourceFields(),
             'originalFileUse' => self::ORIGINAL_FILE_USE,
-            // NULL until an agent token is set: the app hides the feature.
-            'triageEndpoint' => $this->agentToken() === '' ? NULL : Url::fromRoute('sacda_ingest_audit.triage', [], [
+            'sessionEndpoint' => Url::fromRoute('sacda_ingest_audit.agent_session', [], [
+              'query' => ['token' => $this->csrfToken->get('admin/content/ingest-audit/agent-session')],
+            ])->toString(),
+            'queueUrl' => Url::fromRoute('sacda_ingest_audit.triage_queue', [], ['absolute' => TRUE])->toString(),
+            'triageEndpoint' => Url::fromRoute('sacda_ingest_audit.triage', [], [
               'query' => ['token' => $this->csrfToken->get('admin/content/ingest-audit/triage')],
             ])->toString(),
           ],
@@ -166,9 +180,6 @@ GUIDANCE;
    * answered at once.
    */
   public function triage(Request $request): JsonResponse {
-    if ($this->agentToken() === '') {
-      return new JsonResponse(['error' => 'AI triage is not set up on this site.'], 503);
-    }
     $body = json_decode((string) $request->getContent(), TRUE);
     $items = is_array($body['items'] ?? NULL) ? array_values($body['items']) : [];
     $ids = is_array($body['ids'] ?? NULL) ? array_values($body['ids']) : array_map(fn ($i) => $i['id'] ?? NULL, $items);
@@ -218,24 +229,65 @@ GUIDANCE;
   }
 
   /**
-   * Agent side, authenticated by the X-Triage-Token header.
+   * Agent side. Everything goes in a POST JSON body, because the load
+   * balancer in front of production strips custom headers:
    *
-   * GET → {instructions, items: [{key, column, ..., in_file_only,
-   * in_repository_only, rows}]}, the differences still waiting (?limit=N,
-   * default 100). POST {results: [{key, verdict, reason}]} → stores verdicts.
+   * {"token": "...", "limit": 100} → {instructions, waiting, items: [{key,
+   * column, ..., in_file_only, in_repository_only, rows}]}, the differences
+   * still waiting.
+   * {"token": "...", "results": [{key, verdict, reason}]} → stores verdicts.
+   *
+   * The X-Triage-Token header (and a GET) still work where headers survive.
    */
   public function queue(Request $request): JsonResponse {
-    $token = $this->agentToken();
-    if ($token === '' || !hash_equals($token, (string) $request->headers->get('X-Triage-Token', ''))) {
-      return new JsonResponse(['error' => 'Missing or wrong X-Triage-Token.'], 403);
+    $body = $request->isMethod('POST') ? json_decode((string) $request->getContent(), TRUE) : NULL;
+    $body = is_array($body) ? $body : [];
+    $given = trim((string) ($request->headers->get('X-Triage-Token') ?: (is_string($body['token'] ?? NULL) ? $body['token'] : '')));
+    $sessions = $this->agentSessions->get(self::SESSION_STORE);
+    $sessionKey = $given === '' ? '' : hash('sha256', $given);
+    $session = $sessionKey === '' ? NULL : $sessions->get($sessionKey);
+    $site = $this->agentToken();
+    if (!$session && ($site === '' || $given === '' || !hash_equals($site, $given))) {
+      return new JsonResponse(['error' => 'Missing, wrong or expired token. Send it as "token" in the JSON body; session tokens end when the reviewer ends the session or after 8 hours.'], 403);
     }
     $store = $this->triageKeyValue->get(self::TRIAGE_STORE);
+    $action = is_string($body['action'] ?? NULL) ? $body['action'] : '';
 
-    if ($request->isMethod('POST')) {
-      $body = json_decode((string) $request->getContent(), TRUE);
+    // Session-only actions: hand the open page a spreadsheet, and read back
+    // what the page is doing with it.
+    if ($action === 'upload' || $action === 'status') {
+      if (!$session) {
+        return new JsonResponse(['error' => 'Uploads need a session token from an open audit page.'], 403);
+      }
+      if ($action === 'status') {
+        return new JsonResponse([
+          'page_seen' => $session['seen'] ?? NULL,
+          'page_online' => isset($session['seen']) && time() - $session['seen'] < 30,
+          'inbox' => array_map(fn ($f) => $f['name'], $session['inbox'] ?? []),
+          'status' => $session['status'] ?? NULL,
+        ], 200, ['Cache-Control' => 'no-store']);
+      }
+      $name = is_string($body['name'] ?? NULL) ? basename($body['name']) : '';
+      $data = is_string($body['content_base64'] ?? NULL) ? base64_decode($body['content_base64'], TRUE) : FALSE;
+      if ($name === '' || $data === FALSE || $data === '') {
+        return new JsonResponse(['error' => 'Send "name" and "content_base64" (the file, base64-encoded).'], 400);
+      }
+      if (strlen($data) > self::UPLOAD_MAX_BYTES) {
+        return new JsonResponse(['error' => 'File too large (15 MB max).'], 413);
+      }
+      $session['inbox'][] = [
+        'name' => $name,
+        'content_base64' => base64_encode($data),
+        'options' => array_intersect_key(is_array($body['options'] ?? NULL) ? $body['options'] : [], array_flip(['mapping', 'delimiter', 'sheet', 'header_row', 'triage'])),
+      ];
+      $sessions->setWithExpire($sessionKey, $session, self::SESSION_TTL);
+      return new JsonResponse(['queued_for_page' => $name, 'inbox' => count($session['inbox'])], 200, ['Cache-Control' => 'no-store']);
+    }
+
+    if (isset($body['results'])) {
       $saved = 0;
       $rejected = [];
-      foreach (is_array($body['results'] ?? NULL) ? $body['results'] : [] as $r) {
+      foreach (is_array($body['results']) ? $body['results'] : [] as $r) {
         $key = is_string($r['key'] ?? NULL) ? $r['key'] : '';
         $entry = $key !== '' ? $store->get($key) : NULL;
         if (!$entry || !in_array($r['verdict'] ?? '', self::VERDICTS, TRUE)) {
@@ -251,7 +303,7 @@ GUIDANCE;
       return new JsonResponse(['saved' => $saved, 'rejected' => $rejected], 200, ['Cache-Control' => 'no-store']);
     }
 
-    $limit = max(1, min(500, (int) $request->query->get('limit', 100)));
+    $limit = max(1, min(500, (int) ($body['limit'] ?? $request->query->get('limit', 100))));
     $items = [];
     $waiting = 0;
     foreach ($store->getAll() as $key => $entry) {
@@ -273,7 +325,54 @@ GUIDANCE;
   }
 
   /**
-   * The shared secret the agent sends, or '' when triage is off.
+   * Browser side of agent sessions (CSRF-protected, the reviewer's own login).
+   *
+   * {"action":"start"} → {token, expires}: a new temporary token for an agent.
+   * {"action":"poll", "session":"<token>", "status":{...}} → {files: [...]}
+   *   records what the page is doing (for the agent's "status") and hands
+   *   over any spreadsheets the agent uploaded, emptying the inbox.
+   * {"action":"stop", "session":"<token>"} → ends the session.
+   */
+  public function agentSession(Request $request): JsonResponse {
+    $body = json_decode((string) $request->getContent(), TRUE);
+    $body = is_array($body) ? $body : [];
+    $sessions = $this->agentSessions->get(self::SESSION_STORE);
+    $action = $body['action'] ?? '';
+
+    if ($action === 'start') {
+      $token = 'ia-' . bin2hex(random_bytes(16));
+      $sessions->setWithExpire(hash('sha256', $token), [
+        'uid' => (int) $this->currentUser()->id(),
+        'created' => time(),
+        'seen' => time(),
+        'inbox' => [],
+        'status' => NULL,
+      ], self::SESSION_TTL);
+      return new JsonResponse(['token' => $token, 'expires' => time() + self::SESSION_TTL], 200, ['Cache-Control' => 'no-store']);
+    }
+
+    $key = hash('sha256', is_string($body['session'] ?? NULL) ? $body['session'] : '');
+    $session = $sessions->get($key);
+    if (!$session || $session['uid'] !== (int) $this->currentUser()->id()) {
+      return new JsonResponse(['error' => 'This agent session has ended.', 'ended' => TRUE], 404);
+    }
+    if ($action === 'stop') {
+      $sessions->delete($key);
+      return new JsonResponse(['ended' => TRUE], 200, ['Cache-Control' => 'no-store']);
+    }
+    $files = $session['inbox'] ?? [];
+    $session['inbox'] = [];
+    $session['seen'] = time();
+    if (is_array($body['status'] ?? NULL)) {
+      $session['status'] = $body['status'] + ['at' => time()];
+    }
+    $sessions->setWithExpire($key, $session, self::SESSION_TTL);
+    return new JsonResponse(['files' => $files], 200, ['Cache-Control' => 'no-store']);
+  }
+
+  /**
+   * The optional permanent site token, or ''. Session tokens from an open
+   * page are the normal way in; this is for unattended agents.
    *
    * Set with: drush sset sacda_ingest_audit.triage_token <something>
    */

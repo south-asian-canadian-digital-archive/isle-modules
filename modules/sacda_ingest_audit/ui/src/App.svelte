@@ -1,5 +1,5 @@
 <script>
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import SourcePicker from './components/SourcePicker.svelte';
   import ColumnMapper from './components/ColumnMapper.svelte';
   import Summary from './components/Summary.svelte';
@@ -7,7 +7,8 @@
   import ExtraNodes from './components/ExtraNodes.svelte';
   import { issuesCsv } from './lib/audit.js';
   import { suggestMapping, MATCH_KEY } from './lib/compare.js';
-  import { audit } from './lib/worker.js';
+  import { audit, parse } from './lib/worker.js';
+  import { loadSession, saveSession, sessionCall, bytesFromBase64, agentPrompt, POLL_MS } from './lib/agent.js';
   import { buildTable, guessHeaderRow } from './lib/table.js';
   import { openDifferences, requestTriage, load as loadAi, save as saveAi } from './lib/triage.js';
   import { load as loadMarks, save as saveMarks, cellKey, rowKey, valueKey, colSpec, groupSizes, applyResolved } from './lib/resolved.js';
@@ -204,6 +205,102 @@
     run: runTriage, cancel: cancelTriage, accept: acceptAi, of: aiOf,
   } : null);
 
+  // Agent session: a temporary token for an AI agent on someone's machine,
+  // which can answer the triage queue and hand this page spreadsheets.
+  let agent = $state(loadSession()); // { token, expires } | null
+  let agentError = $state('');
+  let agentCopied = $state(false);
+  let agentStatus = $state.raw(null);
+  let agentInbox = [];
+  let agentWorking = false;
+  async function startAgent() {
+    agentError = '';
+    try {
+      const r = await sessionCall(settings.sessionEndpoint, { action: 'start' });
+      agent = { token: r.token, expires: r.expires };
+      saveSession(agent);
+    }
+    catch (e) { agentError = e.message; }
+  }
+  async function stopAgent() {
+    const token = agent?.token;
+    agent = null;
+    saveSession(null);
+    agentStatus = null;
+    if (token) await sessionCall(settings.sessionEndpoint, { action: 'stop', session: token }).catch(() => {});
+  }
+  async function copyPrompt() {
+    try { await navigator.clipboard.writeText(agentPrompt(settings.queueUrl, agent.token, agent.expires)); agentCopied = true; setTimeout(() => (agentCopied = false), 2000); }
+    catch { agentError = 'Could not copy. Select the token and copy it by hand.'; }
+  }
+  function report(status) { agentStatus = status; }
+  function columnReport(r) {
+    const out = {};
+    for (const c of r.columns) out[c.name] = { field: c.target || '', ...(r.stats.columns[c.name] ?? {}) };
+    return out;
+  }
+  async function agentFile(f) {
+    const opts = f.options ?? {};
+    report({ state: 'loading', file: f.name });
+    try {
+      if (triaging) { cancelTriage(); while (triaging) await new Promise((r) => setTimeout(r, 100)); }
+      const workbook = await parse(f.name, new Blob([bytesFromBase64(f.content_base64)]));
+      pickerKey++;
+      loaded(workbook);
+      if (opts.sheet && workbook.sheetNames.includes(opts.sheet)) selectSheet(opts.sheet, opts.header_row ? Number(opts.header_row) : undefined);
+      else if (opts.header_row) selectSheet(sheet, Number(opts.header_row));
+      if (!table) throw new Error(loadError || 'The spreadsheet has no rows.');
+      if (opts.delimiter) delimiter = String(opts.delimiter);
+      if (opts.mapping && typeof opts.mapping === 'object') mapping = { ...mapping, ...opts.mapping };
+      if (!hasKey) throw new Error('No column is mapped to field_identifier; pass options.mapping.');
+      report({ state: 'auditing', file: f.name, mapping: $state.snapshot(mapping), delimiter });
+      await run();
+      if (runError || !result) throw new Error(runError || 'The audit did not finish.');
+      await tick();
+      const differences = openItems.filter((i) => !ai.has(i.id)).length;
+      const st = view.stats;
+      report({
+        state: opts.triage === false ? 'done' : 'queued', file: f.name, delimiter, differences,
+        stats: { rows: st.rows, found: st.found, notFound: st.notFound, duplicates: st.duplicates, unchecked: st.unchecked,
+          ok: st.ok, warn: st.warn, error: st.error, matchRate: st.matchRate, extra: st.extra },
+        columns: columnReport(view), failures: view.failures ?? [],
+      });
+      if (opts.triage !== false) {
+        const file = f.name;
+        runTriage().then(() => { if (agentStatus?.file === file) report({ ...agentStatus, state: triageWaiting ? 'queued' : 'triaged', waiting: triageWaiting }); });
+      }
+    }
+    catch (e) { report({ state: 'error', file: f.name, error: e.message }); }
+  }
+  async function agentWork() {
+    if (agentWorking) return;
+    agentWorking = true;
+    try { while (agentInbox.length) await agentFile(agentInbox.shift()); }
+    finally { agentWorking = false; }
+  }
+  $effect(() => {
+    if (!agent?.token) return;
+    const token = agent.token;
+    let busy = false;
+    const tickPoll = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const r = await sessionCall(settings.sessionEndpoint, { action: 'poll', session: token, status: untrack(() => agentStatus) ?? { state: 'idle' } });
+        agentError = '';
+        if (r.files?.length) { agentInbox.push(...r.files); agentWork(); }
+      }
+      catch (e) {
+        if (e.ended) { agent = null; saveSession(null); agentError = 'The agent session ended.'; }
+        else agentError = e.message;
+      }
+      finally { busy = false; }
+    };
+    tickPoll();
+    const id = setInterval(tickPoll, POLL_MS);
+    return () => clearInterval(id);
+  });
+
   // The result belongs to the mapping/options it was run with; say so when
   // they have changed since, instead of silently showing stale results.
   const runKey = $derived(JSON.stringify([mapping, delimiter, strict, scanExtra, matchMonthStart]));
@@ -280,6 +377,28 @@
     identifier, then every column is checked against what the repository holds, including the parent it hangs from
     and its original file. Nothing is changed in the repository.
   </p>
+
+  <section class="card agent">
+    <h2>AI agent</h2>
+    {#if agent}
+      <p class="muted">An agent can upload spreadsheets to this page and judge the differences while it stays open. Copy the prompt into your agent; it carries the token.</p>
+      <div class="agent-row">
+        <code class="token" title="Agent token">{agent.token}</code>
+        <button class="btn" onclick={copyPrompt}>{agentCopied ? 'Copied ✓' : 'Copy agent prompt'}</button>
+        <button class="btn secondary" onclick={stopAgent}>End session</button>
+        <span class="muted">until {new Date(agent.expires * 1000).toLocaleTimeString()}</span>
+      </div>
+      {#if agentStatus && agentStatus.state !== 'idle'}
+        <p class="muted agent-state" role="status">Agent file <strong>{agentStatus.file}</strong>: {agentStatus.state}{agentStatus.error ? ` · ${agentStatus.error}` : ''}{agentStatus.differences != null ? ` · ${agentStatus.differences} differences queued` : ''}</p>
+      {/if}
+    {:else}
+      <div class="agent-row">
+        <button class="btn secondary" onclick={startAgent}>Start agent session</button>
+        <span class="muted">Gives an AI agent on your computer a temporary token to upload sheets here and triage the differences.</span>
+      </div>
+    {/if}
+    {#if agentError}<p class="error" role="alert">{agentError}</p>{/if}
+  </section>
 
   <section class="card upload" bind:this={uploadCard}>
     <h2>1. Spreadsheet</h2>
@@ -388,6 +507,10 @@
 
 <style>
   .intro { max-width: 70ch; margin: 0 0 1rem; }
+  .agent p { margin: 0 0 0.5rem; }
+  .agent-row { display: flex; flex-wrap: wrap; gap: 0.6rem 0.9rem; align-items: center; }
+  .token { font-size: 0.85rem; padding: 0.3rem 0.5rem; border-radius: 4px; border: 1px solid var(--ia-border); user-select: all; }
+  .agent-state { margin: 0.6rem 0 0; }
   /* Toolbar clearance: Claro's sticky admin toolbar covers the top ~80px. */
   .upload { scroll-margin-top: 6rem; }
   .to-upload {

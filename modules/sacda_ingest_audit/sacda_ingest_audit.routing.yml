@@ -43,3 +43,16 @@ sacda_ingest_audit.triage_queue:
     _access: 'TRUE'
   options:
     no_cache: TRUE
+
+# Agent sessions: an open audit page mints a temporary token for an agent and
+# polls for spreadsheets the agent hands it. See agentSession().
+sacda_ingest_audit.agent_session:
+  path: '/admin/content/ingest-audit/agent-session'
+  defaults:
+    _controller: '\Drupal\sacda_ingest_audit\Controller\IngestAuditController::agentSession'
+  methods: [POST]
+  requirements:
+    _permission: 'use ingest audit'
+    _csrf_token: 'TRUE'
+  options:
+    no_cache: TRUE
