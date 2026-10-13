@@ -181,7 +181,7 @@
       await requestTriage(settings.triageEndpoint, items, (results, waiting) => {
         if (results.length) {
           const next = new Map(ai);
-          for (const r of results) next.set(r.id, { verdict: r.verdict, reason: r.reason });
+          for (const r of results) next.set(r.id, { verdict: r.verdict, reason: r.reason, at: Date.now() });
           ai = next;
           saveAi(next);
         }

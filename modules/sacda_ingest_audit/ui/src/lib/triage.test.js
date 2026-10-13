@@ -62,3 +62,11 @@ test('a hard failure surfaces the server message', async () => {
   const fetchFn = async () => ({ ok: false, status: 503, json: async () => ({ error: 'AI triage is not set up on this site.' }) });
   await expect(requestTriage('/t', [{ id: 'a' }], () => {}, { fetchFn })).rejects.toThrow('not set up');
 });
+
+test('browser copies of verdicts expire after two days', async () => {
+  const { load, MAX_AGE_MS } = await import('./triage.js');
+  const now = 10 * MAX_AGE_MS;
+  globalThis.localStorage = { getItem: () => JSON.stringify([['fresh', { verdict: 'same', at: now - 1000 }], ['old', { verdict: 'same', at: now - MAX_AGE_MS - 1 }], ['legacy', { verdict: 'same' }]]) };
+  expect([...load(now).keys()]).toEqual(['fresh']);
+  delete globalThis.localStorage;
+});

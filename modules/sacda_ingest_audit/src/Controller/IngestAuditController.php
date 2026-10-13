@@ -8,7 +8,6 @@ use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Access\CsrfTokenGenerator;
 use Drupal\Core\Entity\EntityFieldManagerInterface;
 use Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface;
-use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
 use Drupal\Core\State\StateInterface;
 use Drupal\Core\Url;
 use GuzzleHttp\ClientInterface;
@@ -46,6 +45,9 @@ class IngestAuditController extends ControllerBase {
   protected const TRIAGE_STORE = 'sacda_ingest_audit_triage';
   protected const TRIAGE_TOKEN = 'sacda_ingest_audit.triage_token';
   protected const TRIAGE_MAX_ITEMS = 2000;
+  // Verdicts (and unanswered items) are forgotten after this long, so a
+  // difference seen again later is judged afresh, not from an old answer.
+  protected const TRIAGE_TTL = 2 * 86400;
   protected const TRIAGE_MAX_CHARS = 600;
   protected const VERDICTS = ['same', 'problem', 'unsure'];
 
@@ -80,7 +82,6 @@ GUIDANCE;
     protected EntityFieldManagerInterface $fieldManager,
     protected ClientInterface $httpClient,
     protected CsrfTokenGenerator $csrfToken,
-    protected KeyValueFactoryInterface $triageKeyValue,
     protected StateInterface $triageState,
     protected KeyValueExpirableFactoryInterface $agentSessions,
   ) {}
@@ -90,7 +91,6 @@ GUIDANCE;
       $container->get('entity_field.manager'),
       $container->get('http_client'),
       $container->get('csrf_token'),
-      $container->get('keyvalue'),
       $container->get('state'),
       $container->get('keyvalue.expirable'),
     );
@@ -176,8 +176,8 @@ GUIDANCE;
    * POST {ids: [...]} only asks. Either way the answer is the verdicts known
    * so far for those ids, plus how many are still waiting.
    *
-   * Verdicts are shared: a difference another reviewer already had judged is
-   * answered at once.
+   * Verdicts are shared: a difference another reviewer had judged in the
+   * last two days is answered at once; older answers have expired.
    */
   public function triage(Request $request): JsonResponse {
     $body = json_decode((string) $request->getContent(), TRUE);
@@ -188,7 +188,7 @@ GUIDANCE;
       return new JsonResponse(['error' => 'Send between 1 and ' . self::TRIAGE_MAX_ITEMS . ' differences per request.'], 400);
     }
 
-    $store = $this->triageKeyValue->get(self::TRIAGE_STORE);
+    $store = $this->agentSessions->get(self::TRIAGE_STORE);
     $keys = array_combine($ids, array_map(fn ($id) => hash('sha256', $id), $ids));
     $known = $store->getMultiple(array_values($keys));
     $new = [];
@@ -210,7 +210,7 @@ GUIDANCE;
       ];
     }
     if ($new) {
-      $store->setMultiple($new);
+      $store->setMultipleWithExpire($new, self::TRIAGE_TTL);
       $known += $new;
     }
 
@@ -250,7 +250,7 @@ GUIDANCE;
     if (!$session && ($site === '' || $given === '' || !hash_equals($site, $given))) {
       return new JsonResponse(['error' => 'Missing, wrong or expired token. Send it as "token" in the JSON body; session tokens end when the reviewer ends the session or after 8 hours.'], 403);
     }
-    $store = $this->triageKeyValue->get(self::TRIAGE_STORE);
+    $store = $this->agentSessions->get(self::TRIAGE_STORE);
     $action = is_string($body['action'] ?? NULL) ? $body['action'] : '';
 
     // Session-only actions: hand the open page a spreadsheet, and read back
@@ -297,7 +297,7 @@ GUIDANCE;
         $entry['verdict'] = $r['verdict'];
         $entry['reason'] = mb_substr(is_string($r['reason'] ?? NULL) ? $r['reason'] : '', 0, 300);
         $entry['answered'] = time();
-        $store->set($key, $entry);
+        $store->setWithExpire($key, $entry, self::TRIAGE_TTL);
         $saved++;
       }
       return new JsonResponse(['saved' => $saved, 'rejected' => $rejected], 200, ['Cache-Control' => 'no-store']);

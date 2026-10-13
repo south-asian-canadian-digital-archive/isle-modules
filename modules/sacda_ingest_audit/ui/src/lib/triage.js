@@ -47,8 +47,15 @@ export function openDifferences(view) {
   return [...groups.values()].sort((a, b) => b.count - a.count);
 }
 
-export function load() {
-  try { return new Map(JSON.parse(localStorage.getItem(STORE) ?? '[]')); } catch { return new Map(); }
+// Kept for two days, like the server's copy, so old answers get rechecked.
+export const MAX_AGE_MS = 2 * 86400 * 1000;
+
+export function load(now = Date.now()) {
+  try {
+    const entries = JSON.parse(localStorage.getItem(STORE) ?? '[]');
+    return new Map(entries.filter(([, v]) => v?.at && now - v.at < MAX_AGE_MS));
+  }
+  catch { return new Map(); }
 }
 
 export function save(map) {

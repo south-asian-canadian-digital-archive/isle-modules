@@ -135,9 +135,10 @@ calls no external service: it only keeps a small queue.
    "same" as resolved or every "problem" as a problem (Undo reverses it). The
    issues CSV gains `ai` and `ai_reason` columns.
 
-Verdicts are stored on the site (key-value collection
-`sacda_ingest_audit_triage`), so the same difference is answered at once for
-the next reviewer and is never asked twice.
+Verdicts are stored on the site (expirable key-value collection
+`sacda_ingest_audit_triage`) and in the browser for **two days**: within that
+window the same difference is answered at once for the next reviewer; after it,
+the difference is queued and judged afresh, so a wrong answer cannot stick.
 
 **Agent sessions (the normal way in):** the **AI agent** card at the top of the
 page has **Start agent session**, which mints a temporary token (8 hours, or
