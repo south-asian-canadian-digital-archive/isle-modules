@@ -70,3 +70,13 @@ test('browser copies of verdicts expire after two days', async () => {
   expect([...load(now).keys()]).toEqual(['fresh']);
   delete globalThis.localStorage;
 });
+
+test('agent prompt fills in endpoint, token and expiry', async () => {
+  const { agentPrompt } = await import('./agent.js');
+  const p = agentPrompt('https://x/ingest-audit/triage-queue', 'ia-abc', 1800000000);
+  expect(p).not.toMatch(/<TOKEN>|<ENDPOINT>|<EXPIRY>/);
+  expect(p).toContain('Endpoint: https://x/ingest-audit/triage-queue');
+  expect(p).toContain('{"token": "ia-abc", "action": "upload"');
+  expect(p).toContain('Saroya, Karnail \\"Joe\\" Singh');
+  expect(p).toContain('30. Long text cut off');
+});
