@@ -34,3 +34,16 @@ services:
       - '@entity_type.manager'
     tags:
       - name: event_subscriber
+
+  # Stores discovery answers (mostly "no image") in sacda_thumbnail so
+  # collection cards stop re-walking their children on every view.
+  sacda_modules.stored_image_discovery:
+    class: Drupal\sacda_modules\ImageDiscovery\StoredImageDiscovery
+    decorates: dgi_image_discovery.service
+    arguments:
+      - '@.inner'
+      - '@database'
+      - '@entity_type.manager'
+      - '@current_user'
+      - '@event_dispatcher'
+      - '@settings'

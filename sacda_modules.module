@@ -21,7 +21,9 @@
 declare(strict_types=1);
 
 use Drupal\Core\Cache\CacheableMetadata;
+use Drupal\Core\Entity\EntityInterface;
 use Drupal\node\NodeInterface;
+use Drupal\sacda_modules\ImageDiscovery\StoredImageDiscovery;
 
 /**
  * Implements hook_theme().
@@ -184,4 +186,73 @@ function sacda_modules_page_attachments(array &$attachments): void {
   // Recompute when facets or blocks change.
   $attachments['#cache']['tags'][] = 'config:facets_facet_list';
   $attachments['#cache']['tags'][] = 'config:block_list';
+}
+
+/**
+ * Implements hook_entity_insert().
+ */
+function sacda_modules_entity_insert(EntityInterface $entity): void {
+  _sacda_modules_forget_thumbnails($entity);
+}
+
+/**
+ * Implements hook_entity_update().
+ */
+function sacda_modules_entity_update(EntityInterface $entity): void {
+  _sacda_modules_forget_thumbnails($entity);
+}
+
+/**
+ * Implements hook_entity_delete().
+ */
+function sacda_modules_entity_delete(EntityInterface $entity): void {
+  _sacda_modules_forget_thumbnails($entity);
+}
+
+/**
+ * Forgets the stored thumbnail of every node a node/media save could affect.
+ *
+ * A node's answer depends on its own media and on everything below it, so walk
+ * UP from the saved entity through field_member_of. Both the old and new
+ * parents count: moving an item changes the answer at its former home too.
+ */
+function _sacda_modules_forget_thumbnails(EntityInterface $entity): void {
+  $start = [];
+  $parent_field = match ($entity->getEntityTypeId()) {
+    'node' => 'field_member_of',
+    'media' => 'field_media_of',
+    default => NULL,
+  };
+  if ($parent_field === NULL) {
+    return;
+  }
+  if ($entity->getEntityTypeId() === 'node') {
+    $start[] = (int) $entity->id();
+  }
+  foreach (array_filter([$entity, $entity->original ?? NULL]) as $revision) {
+    if ($revision->hasField($parent_field)) {
+      foreach ($revision->get($parent_field) as $item) {
+        $start[] = (int) $item->target_id;
+      }
+    }
+  }
+
+  $database = \Drupal::database();
+  $seen = [];
+  $queue = array_filter($start);
+  // Bounded in case of a field_member_of cycle.
+  while ($queue && count($seen) < 1000) {
+    $nid = array_shift($queue);
+    if (isset($seen[$nid])) {
+      continue;
+    }
+    $seen[$nid] = TRUE;
+    $parents = $database->query('SELECT field_member_of_target_id FROM {node__field_member_of} WHERE entity_id = :nid', [':nid' => $nid])->fetchCol();
+    array_push($queue, ...array_map('intval', $parents));
+  }
+
+  $discovery = \Drupal::service('dgi_image_discovery.service');
+  if ($discovery instanceof StoredImageDiscovery) {
+    $discovery->forget(array_keys($seen));
+  }
 }

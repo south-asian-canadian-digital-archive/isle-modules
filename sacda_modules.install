@@ -135,6 +135,22 @@ function sacda_modules_schema(): array {
     ],
   ];
 
+  // Precomputed thumbnail per node; see StoredImageDiscovery.
+  $schema['sacda_thumbnail'] = [
+    'description' => 'The image dgi_image_discovery picks for a node, so collection cards need not walk their children on view.',
+    'fields' => [
+      'nid' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE],
+      'mid' => [
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => FALSE,
+        'description' => 'Chosen media ID; NULL means discovery found nothing.',
+      ],
+      'computed' => ['type' => 'int', 'not null' => TRUE, 'default' => 0],
+    ],
+    'primary key' => ['nid'],
+  ];
+
   return $schema;
 }
 
@@ -169,5 +185,16 @@ function sacda_modules_update_10002(): void {
 
   if (!$existing) {
     $connection->query('ALTER TABLE ' . $table . ' ADD FULLTEXT KEY ft_place_name (name_norm, variant_norm)');
+  }
+}
+
+/**
+ * Create the sacda_thumbnail table for precomputed collection thumbnails.
+ */
+function sacda_modules_update_10003(): void {
+  $schema = \Drupal::database()->schema();
+  if (!$schema->tableExists('sacda_thumbnail')) {
+    $tables = sacda_modules_schema();
+    $schema->createTable('sacda_thumbnail', $tables['sacda_thumbnail']);
   }
 }
