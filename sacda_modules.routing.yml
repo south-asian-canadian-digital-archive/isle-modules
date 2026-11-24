@@ -48,3 +48,18 @@ sacda_modules.place_lookup_api:
     _permission: 'use place lookup'
   options:
     no_cache: TRUE
+
+# Term matches for organise (the SACDA ingest tool): a sheet's term values in,
+# the existing terms each could be out, plus the terms holding given authority
+# links. Read-only. Basic auth only (a POST without a cookie can't be forged
+# from a browser), for users who can administer taxonomy - the Workbench user.
+sacda_modules.term_matches:
+  path: '/api/organise/term-matches'
+  defaults:
+    _controller: '\Drupal\sacda_modules\Controller\TermMatchController::matches'
+  methods: [POST]
+  options:
+    _auth: ['basic_auth']
+    no_cache: TRUE
+  requirements:
+    _permission: 'administer taxonomy'

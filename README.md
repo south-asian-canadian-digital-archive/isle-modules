@@ -235,3 +235,36 @@ if the index is missing: the service checks for it and falls through to LIKE.
   instrument: TGN types administrative places as `general region` and
   `second level subdivision`, which the allowlist does not currently carry, so
   strict mode would drop real administrative places. Left off by default.
+
+## Term matches (for organise)
+
+An endpoint for organise (scripts/workbench-preprocessor in the workbench ops repo):
+
+`POST /api/organise/term-matches` (basic auth, `administer taxonomy`)
+
+Request:
+
+```json
+{"values": [{"vid": "subject", "value": "Anniversarys"}], "uris": ["http://id.loc.gov/authorities/subjects/sh85005466"]}
+```
+
+Response:
+
+```json
+{"version": 1,
+ "matches": [{"vid": "subject", "value": "Anniversarys", "terms": [{"tid": "1414", "name": "Anniversaries", "uris": []}]}],
+ "uris": {"http://id.loc.gov/...": [{"vid": "subject", "tid": "12", "name": "...", "uris": ["..."]}]}}
+```
+
+For each value, `terms` holds every term organise could pick for it: the same
+name ignoring case, the same letters ignoring accents/spacing/punctuation, a
+singular/plural, a typo within organise's budget (optimal string alignment
+distance: 0 for up to 3 letters, 1 up to 7, 2 up to 12, 3 beyond), and the term
+with that ID when the value is a number. organise applies its own rules to that
+short list, so it no longer downloads whole vocabularies (the SACDA thesaurus is
+thousands of terms). The code is `src/Controller/TermMatchController.php`. Keep `budget()` and the comparisons in step with
+`crates/core/src/suggest.rs` there: this list has to include whatever those rules
+could choose.
+
+Reads `taxonomy_term_field_data` and the authority link tables directly; nothing
+is written.

@@ -12,3 +12,6 @@ dependencies:
   - dgi_image_discovery:dgi_image_discovery
   - facets:facets
   - facets:facets_date_range
+  # Term matches for organise.
+  - drupal:taxonomy
+  - drupal:basic_auth
